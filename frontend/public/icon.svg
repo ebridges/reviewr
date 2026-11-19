@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824">
+  <!-- reviewr app icon: two review-comment bubbles, the front one checked off. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="0.55" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#C026D3"/>
+    </linearGradient>
+    <linearGradient id="check" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#1E1B4B" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <!-- macOS icon grid: 824px tile centered in the 1024 canvas -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- back bubble -->
+  <g opacity="0.55">
+    <path d="M400 230h330a70 70 0 0 1 70 70v190a70 70 0 0 1-70 70h-20v80l-95-80H400a70 70 0 0 1-70-70V300a70 70 0 0 1 70-70z" fill="#E0E7FF"/>
+  </g>
+  <!-- front bubble -->
+  <g filter="url(#shadow)">
+    <path d="M294 380h360a74 74 0 0 1 74 74v214a74 74 0 0 1-74 74H420l-108 92v-92h-18a74 74 0 0 1-74-74V454a74 74 0 0 1 74-74z" fill="#FFFFFF"/>
+  </g>
+  <!-- comment lines -->
+  <rect x="290" y="458" width="200" height="34" rx="17" fill="#C7D2FE"/>
+  <rect x="290" y="528" width="140" height="34" rx="17" fill="#C7D2FE"/>
+  <!-- check badge -->
+  <circle cx="610" cy="600" r="92" fill="url(#check)"/>
+  <path d="M566 602l32 32 60-66" fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

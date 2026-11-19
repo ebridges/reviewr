@@ -1,0 +1,280 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import type { PRContext } from "../App";
+import { api, type WorkItem } from "../api";
+import { ChecksPanel } from "../components/ChecksPanel";
+import { DiffView } from "../components/Code";
+import { prHref, storageGet, threadTitle, where } from "../lib";
+import { itemStatus } from "./Plan";
+
+export function Fix({ ctx, arg }: { ctx: PRContext; arg?: string }) {
+  const { pr, state } = ctx.data!;
+  if (!state.plan.length) {
+    return (
+      <main className="page">
+        <p className="muted">No work items yet. <a href={prHref(pr.ref, "plan")}>Group the fixes in Plan</a> first.</p>
+      </main>
+    );
+  }
+  const item = state.plan.find((w) => String(w.id) === arg) ?? state.plan.find((w) => w.status !== "committed") ?? state.plan[0];
+  const next = state.plan.find((w) => w.id > item.id && w.status !== "committed");
+
+  return (
+    <main className="page">
+      <nav aria-label="Work items" className="strip">
+        {state.plan.map((w) => (
+          <a key={w.id} href={prHref(pr.ref, "fix", String(w.id))} className={`strip-item ${w.id === item.id ? "on" : ""}`}>
+            <strong>{w.id}</strong> <span className="muted">{itemStatus(w).toLowerCase()}</span>
+          </a>
+        ))}
+      </nav>
+      <div className="page-head">
+        <div className="grow">
+          <div className="muted small">Work item {item.id} of {state.plan.length}{item.mode === "me" ? " · you're doing this one" : ""}</div>
+          <h1>{item.title}</h1>
+        </div>
+        <a className="btn" href={prHref(pr.ref, "plan")}>Back to plan</a>
+        {next && <a className="btn" href={prHref(pr.ref, "fix", String(next.id))}>Next item</a>}
+      </div>
+      {item.mode === "agent" ? <AgentItem key={item.id} ctx={ctx} item={item} /> : <OwnItem key={item.id} ctx={ctx} item={item} />}
+    </main>
+  );
+}
+
+function ThreadChecks({ ctx, item, subtitle }: { ctx: PRContext; item: WorkItem; subtitle: string }) {
+  const { pr, state } = ctx.data!;
+  const done = item.thread_ids.filter((id) => item.checks[id]?.addressed).length;
+  // Files open in reviewr's worktree for this PR, which is where your edits and the
+  // accepted patches live. An agent's draft isn't there until you accept it.
+  const openable = item.mode === "me" || item.status === "committed";
+  const editor = storageGet("reviewr:editor") || "vscode";
+  const [opened, setOpened] = useState<string>();
+  const open = async (path: string, line: number | null) => {
+    try {
+      const res = await api.open(pr.ref, { path, line, editor });
+      setOpened(`Opened: ${res.argv.join(" ")}`);
+    } catch (e) {
+      setOpened((e as Error).message);
+    }
+  };
+  return (
+    <aside className="card checks">
+      <h2>Threads · {Object.keys(item.checks).length ? `${done} of ${item.thread_ids.length} addressed` : item.thread_ids.length}</h2>
+      <p className="muted small">{subtitle}</p>
+      {item.thread_ids.map((id) => {
+        const t = pr.threads.find((x) => x.id === id);
+        const c = item.checks[id];
+        if (!t) return null;
+        return (
+          <div key={id} className="check-item">
+            <span className={c ? (c.addressed ? "ok-text" : "warn-text") : "muted"} aria-label={c ? (c.addressed ? "Addressed" : "Not addressed") : "Not checked"}>
+              {c ? (c.addressed ? "✓" : "!") : "○"}
+            </span>
+            <div className="min0">
+              <div className="small">{threadTitle(t, state)}</div>
+              {openable ? (
+                <button className="link mono tiny" title={`Open in ${editor}, in reviewr's worktree`} onClick={() => open(t.path, t.line ?? t.original_line)}>
+                  {where(t)}
+                </button>
+              ) : (
+                <div className="mono muted tiny">{where(t)}</div>
+              )}
+              {c && <div className="muted tiny">{c.note}</div>}
+              {state.decisions[id]?.note && <div className="muted tiny">Your note: {state.decisions[id].note}</div>}
+            </div>
+          </div>
+        );
+      })}
+      {opened && <p className="muted tiny">{opened}</p>}
+    </aside>
+  );
+}
+
+function defaultMessage(item: WorkItem, reviewers: string[]) {
+  const who = reviewers.length ? ` from ${reviewers.join(", ")}` : "";
+  return `${item.title}\n\nAddresses ${item.thread_ids.length} review comment${item.thread_ids.length === 1 ? "" : "s"}${who}.`;
+}
+
+function useReviewers(ctx: PRContext, item: WorkItem) {
+  const { pr } = ctx.data!;
+  return [...new Set(item.thread_ids.map((id) => pr.threads.find((t) => t.id === id)?.comments[0]?.author).filter(Boolean) as string[])];
+}
+
+function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
+  const { pr } = ctx.data!;
+  const [message, setMessage] = useState(defaultMessage(item, useReviewers(ctx, item)));
+  const [instruction, setInstruction] = useState(item.instruction);
+  const draft = useMutation({
+    mutationFn: async (override?: string) => {
+      const text = override ?? instruction;
+      if (text !== item.instruction) await api.patchItem(pr.ref, item.id, { instruction: text });
+      return api.draft(pr.ref, item.id);
+    },
+    onSuccess: ctx.setState,
+  });
+  const accept = useMutation({ mutationFn: () => api.accept(pr.ref, item.id, message), onSuccess: ctx.setState });
+  const checks = useMutation({ mutationFn: () => api.runChecks(pr.ref, item.id), onSuccess: ctx.setState });
+  const files = (item.patch.match(/^diff --git/gm) ?? []).length;
+  const failing = item.check_report?.runs.filter((r) => r.status === "failed" || r.status === "error").length ?? 0;
+  const fixFailures = (summary: string) => {
+    const text = `Fix these check failures without changing what the patch does for the review comments:\n\n${summary}`;
+    setInstruction(text);
+    draft.mutate(text);
+  };
+
+  return (
+    <div className="fix-layout">
+      <ThreadChecks ctx={ctx} item={item} subtitle="Checked against the agent's patch when it finishes." />
+      <section className="stack min0">
+        {item.status === "pending" && (
+          <div className="card">
+            <p>The agent hasn't drafted this item yet.</p>
+            <button className="btn primary" onClick={() => draft.mutate(undefined)} disabled={draft.isPending}>Draft with agent</button>
+          </div>
+        )}
+        {item.status === "drafting" && (
+          <div className="card">
+            <p className="muted">
+              {item.checks_running
+                ? "The agent finished. Running lint and tests for the changed files…"
+                : "The agent is drafting this item in its own worktree. Checks run when it finishes; this page updates by itself."}
+            </p>
+          </div>
+        )}
+        {item.status === "failed" && (
+          <div className="card">
+            <p className="error small">The draft failed: {item.error}</p>
+            <button className="btn" onClick={() => draft.mutate(undefined)} disabled={draft.isPending}>Try again</button>
+          </div>
+        )}
+        {item.status === "committed" && (
+          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p></div>
+        )}
+        {(item.status === "ready" || item.status === "committed") && item.patch && (
+          <div className="card flush">
+            <div className="card-head">
+              <strong>Agent's draft patch</strong>
+              <span className="muted small">{files} file{files === 1 ? "" : "s"}</span>
+            </div>
+            <DiffView text={item.patch} />
+          </div>
+        )}
+        {item.status === "ready" && (
+          <>
+            {item.agent_log && (
+              <details className="card">
+                <summary className="small">What the agent says it did</summary>
+                <p className="small pre-wrap">{item.agent_log}</p>
+              </details>
+            )}
+            <label className="field">
+              Commit message
+              <textarea className="input mono" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />
+            </label>
+            {failing > 0 && (
+              <p className="warn-box small">{failing} check{failing === 1 ? "" : "s"} failed or couldn't run. You can still accept, or ask the agent to fix them first.</p>
+            )}
+            <div className="row-wrap">
+              <button className="btn primary" onClick={() => accept.mutate()} disabled={accept.isPending || !message.trim() || item.checks_running}>Accept and commit</button>
+              <span className="muted small">Commits locally on reviewr's branch. Pushed together with the replies in Respond.</span>
+            </div>
+            {accept.error && <p className="error small">{(accept.error as Error).message}</p>}
+          </>
+        )}
+        {draft.error && <p className="error small">{(draft.error as Error).message}</p>}
+      </section>
+      <aside className="stack side">
+        {(item.patch || item.check_report) && (
+          <ChecksPanel item={item} running={checks.isPending} onRun={() => checks.mutate()}
+            onFixFailures={item.status === "ready" ? fixFailures : undefined} />
+        )}
+        {checks.error && <p className="error small">{(checks.error as Error).message}</p>}
+        <section className="card">
+          <h2>Ask the agent to change it</h2>
+          <p className="muted small">Applies to this work item only. Starts a new draft.</p>
+          <textarea className="input" rows={4} value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="e.g. also handle the refund path" disabled={item.status === "committed"} />
+          <button className="btn full" onClick={() => draft.mutate(undefined)} disabled={draft.isPending || item.status === "drafting" || item.status === "committed"}>
+            {item.status === "pending" ? "Draft with this instruction" : "Revise patch"}
+          </button>
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function OwnItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
+  const { pr } = ctx.data!;
+  const [message, setMessage] = useState(defaultMessage(item, useReviewers(ctx, item)));
+  const diff = useQuery({
+    queryKey: ["workdiff", pr.ref.number],
+    queryFn: () => api.workDiff(pr.ref),
+    refetchInterval: item.status === "committed" ? false : 5000,
+  });
+  const check = useMutation({ mutationFn: () => api.check(pr.ref, item.id), onSuccess: ctx.setState });
+  // Only the files you tick are committed; anything else you have uncommitted stays put.
+  const changedFiles = [...new Set([...(diff.data?.diff ?? "").matchAll(/^diff --git a\/.+? b\/(.+)$/gm)].map((m) => m[1]))];
+  const itemFiles = new Set(item.thread_ids.map((id) => pr.threads.find((t) => t.id === id)?.path));
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const isPicked = (f: string) => picked[f] ?? itemFiles.has(f);
+  const chosen = changedFiles.filter(isPicked);
+  const commit = useMutation({ mutationFn: () => api.commitOwn(pr.ref, item.id, message, chosen), onSuccess: ctx.setState });
+  const runChecks = useMutation({ mutationFn: () => api.runChecks(pr.ref, item.id), onSuccess: ctx.setState });
+
+  const changed = (diff.data?.diff.match(/^diff --git/gm) ?? []).length;
+
+  return (
+    <div className="fix-layout">
+      <ThreadChecks ctx={ctx} item={item} subtitle="Use “Check against threads” after you make changes." />
+      <section className="stack min0">
+        {item.status === "committed" ? (
+          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p></div>
+        ) : (
+          <>
+            <p className="muted small">
+              Edit in the PR's workspace (open it from Workspace in the header), from VS Code or anywhere else. Your uncommitted changes there show up below, and Commit makes them this item's commit.
+            </p>
+            <div className="card flush">
+              <div className="card-head">
+                <strong>Your uncommitted changes</strong>
+                <span className="muted small">{changed} file{changed === 1 ? "" : "s"} · refreshes every 5 seconds</span>
+              </div>
+              {diff.error && <p className="error small pad">{(diff.error as Error).message}</p>}
+              {diff.data && (diff.data.diff ? <DiffView text={diff.data.diff} /> : <p className="muted small pad">No changes yet.</p>)}
+            </div>
+            {changedFiles.length > 0 && (
+              <fieldset className="card file-pick">
+                <legend className="small strong">Files in this commit</legend>
+                <p className="muted tiny">Files the item's comments point at start ticked. Other uncommitted files in your checkout stay out unless you tick them.</p>
+                {changedFiles.map((f) => (
+                  <label key={f} className="check-row small">
+                    <input type="checkbox" checked={isPicked(f)} onChange={(e) => setPicked({ ...picked, [f]: e.target.checked })} />
+                    <span className="mono">{f}</span>
+                    {itemFiles.has(f) && <span className="muted tiny">· from this item</span>}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            <label className="field">
+              Commit message
+              <textarea className="input mono" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />
+            </label>
+            <div className="row-wrap">
+              <button className="btn" onClick={() => check.mutate()} disabled={check.isPending || !diff.data?.diff}>
+                {check.isPending ? "Checking…" : "Check against threads"}
+              </button>
+              <button className="btn primary" onClick={() => commit.mutate()} disabled={commit.isPending || !chosen.length || !message.trim()}>
+                Commit {chosen.length} file{chosen.length === 1 ? "" : "s"}
+              </button>
+              <span className="muted small">Commits stay local until Respond.</span>
+            </div>
+            {(check.error || commit.error) && <p className="error small">{((check.error || commit.error) as Error).message}</p>}
+          </>
+        )}
+      </section>
+      <aside className="stack side">
+        <ChecksPanel item={item} running={runChecks.isPending} onRun={() => runChecks.mutate()} />
+        {runChecks.error && <p className="error small">{(runChecks.error as Error).message}</p>}
+      </aside>
+    </div>
+  );
+}
