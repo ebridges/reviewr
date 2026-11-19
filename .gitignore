@@ -1,0 +1,9 @@
+reviewr.toml
+.venv/
+__pycache__/
+node_modules/
+dist/
+*.sqlite3
+.DS_Store
+.env
+*.tsbuildinfo

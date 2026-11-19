@@ -1,0 +1,10 @@
+{
+  "name": "reviewr",
+  "private": true,
+  "description": "Review and respond to comments on very large pull requests",
+  "scripts": {
+    "setup": "cd backend && uv sync && cd ../frontend && npm install && cd ../desktop && npm install",
+    "start": "npm --prefix desktop start",
+    "dev": "npm --prefix desktop run dev"
+  }
+}
