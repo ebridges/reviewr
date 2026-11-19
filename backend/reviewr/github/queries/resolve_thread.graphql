@@ -1,0 +1,6 @@
+# D5: resolving exists only in GraphQL.
+mutation ResolveThread($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread { id isResolved }
+  }
+}

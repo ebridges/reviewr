@@ -1,0 +1,5 @@
+mutation RequestReviews($prId: ID!, $userIds: [ID!]!) {
+  requestReviews(input: { pullRequestId: $prId, userIds: $userIds, union: true }) {
+    pullRequest { id }
+  }
+}

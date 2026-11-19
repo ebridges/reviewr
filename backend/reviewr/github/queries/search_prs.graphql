@@ -1,0 +1,24 @@
+# PR list. $q is a GitHub search string such as "is:pr is:open author:@me".
+# Cost is about 1-2 points: one search plus one threads and one commits
+# connection per PR, divided by 100.
+query SearchPRs($q: String!) {
+  search(query: $q, type: ISSUE, first: 50) {
+    nodes {
+      ... on PullRequest {
+        id
+        number
+        title
+        url
+        isDraft
+        updatedAt
+        headRefName
+        changedFiles
+        reviewDecision
+        repository { owner { login } name }
+        reviewThreads(first: 100) { nodes { isResolved } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}

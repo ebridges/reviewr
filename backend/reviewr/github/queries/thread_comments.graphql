@@ -1,0 +1,12 @@
+# Remaining comments for a thread with more than 100 (rare).
+query ThreadComments($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id author { login } body createdAt url diffHunk originalCommit { oid } }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}

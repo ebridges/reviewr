@@ -1,0 +1,18 @@
+# One page each of reviews and top-level PR comments.
+# Paginate with $reviewsAfter / $commentsAfter (D3).
+query Conversation($owner: String!, $repo: String!, $number: Int!,
+                   $reviewsAfter: String, $commentsAfter: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviews(first: 100, after: $reviewsAfter) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id author { login } state body submittedAt url }
+      }
+      comments(first: 100, after: $commentsAfter) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id databaseId author { login } body createdAt url }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}

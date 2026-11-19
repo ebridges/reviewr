@@ -1,0 +1,7 @@
+# D5: a review with no event stays PENDING, so replies added to it are posted
+# together, with one notification, when it is submitted.
+mutation StartReview($prId: ID!, $body: String!) {
+  addPullRequestReview(input: { pullRequestId: $prId, body: $body }) {
+    pullRequestReview { id }
+  }
+}

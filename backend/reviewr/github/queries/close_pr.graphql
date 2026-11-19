@@ -1,0 +1,6 @@
+# Closes without merging. It can be reopened on GitHub.
+mutation ClosePR($prId: ID!) {
+  closePullRequest(input: { pullRequestId: $prId }) {
+    pullRequest { state }
+  }
+}
