@@ -376,6 +376,19 @@ textarea.input { resize: vertical; }
 .pad-top { padding-top: 12px; }
 .small .threads-link { padding: 0; font-size: inherit; }
 
+/* Fix CI */
+.ci-fix { --cat: #dc2626; }
+.ci-rerun { --cat: #d97706; }
+.ci-unrelated { --cat: #6b7280; }
+.ci-none { --cat: var(--border-strong); }
+.conflict-group.ci-fix .list-head, .conflict-group.ci-rerun .list-head, .conflict-group.ci-unrelated .list-head, .conflict-group.ci-none .list-head { border-left: 4px solid var(--cat); }
+.cat-dot.ci-fix, .cat-dot.ci-rerun, .cat-dot.ci-unrelated, .cat-dot.ci-none { background: var(--cat); }
+.annotations { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.error-text { color: var(--error); }
+.code.log { max-height: 420px; }
+.ci-summary { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.small code, .tiny code, .suggest code { font-family: var(--mono); font-size: 0.92em; padding: 0 4px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+
 /* Decision categories: one color each, used for dots, group edges and suggestion chips */
 .dc-fix { --dc: #e5484d; }
 .dc-reply { --dc: #3e8ef7; }

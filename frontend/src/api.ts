@@ -273,6 +273,43 @@ export interface MergePreview {
   commits: MergeCommit[];
 }
 
+// Fix CI (backend/reviewr/ci.py)
+export type CICategory = "fix" | "rerun" | "unrelated";
+export interface CIAnnotation { path: string; line: number | null; level: string; message: string }
+export interface CIFailure {
+  id: string;
+  name: string;
+  workflow: string | null;
+  conclusion: string;
+  url: string | null;
+  required: boolean;
+  job_id: number | null;
+  annotations: CIAnnotation[];
+  excerpt: string;
+  category: CICategory | null;
+  title: string;
+  reason: string;
+  files: string[];
+  ai_name: string | null;
+  status: "open" | "fixed" | "rerun" | "dismissed";
+  fix: ProposedFixData | null;
+  commit_sha: string | null;
+}
+export interface CISession {
+  head_sha: string;
+  started_at: string;
+  status: "analyzing" | "ready";
+  error: string | null;
+  failures: Record<string, CIFailure>;
+  order: string[];
+  pushed: boolean;
+}
+export interface CIStatus {
+  head_sha: string;
+  state: string | null;
+  failures: Pick<CIFailure, "id" | "name" | "workflow" | "conclusion" | "url" | "required">[];
+}
+
 export const refKey = (r: PRRef) => `${r.owner}/${r.repo}#${r.number}`;
 const base = (r: PRRef) => `/api/prs/${r.owner}/${r.repo}/${r.number}`;
 
@@ -344,6 +381,21 @@ export const api = {
   settings: () => call<Settings>("/api/settings"),
   mergeRemote: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote`),
   mergeRemoteSync: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote/sync`, send("POST", { confirm: true })),
+  ciStatus: (r: PRRef, fresh = false) => call<CIStatus>(`${base(r)}/ci/status?fresh=${fresh}`),
+  ci: (r: PRRef) => call<{ session: CISession | null }>(`${base(r)}/ci`),
+  ciStart: (r: PRRef) => call<{ session: CISession | null }>(`${base(r)}/ci/start`, send("POST")),
+  ciReanalyze: (r: PRRef) => call<{ session: CISession | null }>(`${base(r)}/ci/reanalyze`, send("POST")),
+  ciPatch: (r: PRRef, id: string, patch: { category?: CICategory; status?: "open" | "fixed" | "dismissed" }) =>
+    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}`, send("PATCH", patch)),
+  ciFix: (r: PRRef, id: string) => call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix`, send("POST")),
+  ciFixApply: (r: PRRef, id: string) =>
+    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix/apply`, send("POST")),
+  ciFixDiscard: (r: PRRef, id: string) =>
+    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix`, send("DELETE")),
+  ciRerun: (r: PRRef, id: string) =>
+    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/rerun`, send("POST", { confirm: true })),
+  ciPush: (r: PRRef) => call<{ session: CISession | null }>(`${base(r)}/ci/push`, send("POST", { confirm: true })),
+  ciDiscard: (r: PRRef) => call<{ session: CISession | null }>(`${base(r)}/ci`, send("DELETE")),
   mergePreview: (r: PRRef) => call<MergePreview>(`${base(r)}/merge/preview`),
   merge: (r: PRRef) => call<MergeView>(`${base(r)}/merge`),
   mergeStart: (r: PRRef) => call<MergeView>(`${base(r)}/merge/start`, send("POST")),

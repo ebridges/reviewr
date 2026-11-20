@@ -24,7 +24,7 @@ export const GROUP_LABEL: Record<Decision, string> = {
 
 // Routing: #/  #/settings  #/pr/owner/repo/123/triage[/<item>]  #/pr/owner/repo/123/merge[/resolve/<id>]
 export interface Route {
-  page: "prs" | "settings" | "overview" | "triage" | "plan" | "fix" | "respond" | "merge";
+  page: "prs" | "settings" | "overview" | "triage" | "plan" | "fix" | "respond" | "merge" | "ci";
   ref?: PRRef;
   arg?: string;
 }

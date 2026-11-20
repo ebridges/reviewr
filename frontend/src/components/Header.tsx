@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import type { PRView } from "../api";
 import { prHref, type Route } from "../lib";
+import { ciSteps, useCIStatus } from "../pages/CI";
 import { mergeStatus, mergeSteps, useBranchStatus, type WorkflowStep } from "../pages/Merge";
 import { AISwitch } from "./AISwitch";
 import { WorkspaceMenu } from "./WorkspacePanel";
@@ -54,19 +55,29 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
 function WorkflowTracker({ route, counts, base }: { route: Route; counts: Record<string, string>; base: string }) {
   const ref = route.ref!;
   const inMerge = route.page === "merge";
+  const inCI = route.page === "ci";
   const { session, preview } = useBranchStatus(ref);
   const status = mergeStatus(session, preview);
+  const ci = useCIStatus(ref);
   const steps: WorkflowStep[] = inMerge
     ? mergeSteps(ref, session, route.arg)
-    : STEPS.map((s) => ({ key: s.page, label: s.label + (counts[s.page] ?? ""), href: prHref(ref, s.page), on: route.page === s.page }));
+    : inCI
+      ? ciSteps(ref, ci.session, route.arg)
+      : STEPS.map((s) => ({ key: s.page, label: s.label + (counts[s.page] ?? ""), href: prHref(ref, s.page), on: route.page === s.page }));
   return (
     <div className="workflow">
       <div className="seg workflow-switch" role="group" aria-label="Workflow">
-        <a href={prHref(ref, "overview")} className={inMerge ? "" : "on"} aria-current={inMerge ? undefined : "true"}>Review comments</a>
+        <a href={prHref(ref, "overview")} className={inMerge || inCI ? "" : "on"} aria-current={inMerge || inCI ? undefined : "true"}>Review comments</a>
         <a href={prHref(ref, "merge")} className={inMerge ? "on" : ""} aria-current={inMerge ? "true" : undefined}>
           Update from {base}
           {status && <span className={`wf-chip ${status.warn ? "warn" : ""}`} title={status.title}>{status.text}</span>}
         </a>
+        {(ci.show || inCI) && (
+          <a href={prHref(ref, "ci")} className={inCI ? "on" : ""} aria-current={inCI ? "true" : undefined}>
+            Fix CI
+            {ci.chip && <span className={`wf-chip ${ci.warn ? "warn" : ""}`}>{ci.chip}</span>}
+          </a>
+        )}
       </div>
       <nav aria-label="Workflow steps" className="steps">
         {steps.map((s, i) => (

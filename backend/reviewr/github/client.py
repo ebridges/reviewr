@@ -18,6 +18,7 @@ import httpx
 log = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://api.github.com/graphql"
+REST_URL = "https://api.github.com"
 QUERY_DIR = Path(__file__).parent / "queries"
 
 # D6: minimum gap between mutations, to stay under GitHub's secondary
@@ -76,6 +77,13 @@ class GitHubClient:
             return self._post(load_query(name), variables)
         finally:
             self._last_mutation = time.monotonic()
+
+    def rest(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """D11: REST, only for what GraphQL doesn't offer: Actions job logs and re-runs."""
+        resp = self._http.request(method, REST_URL + path, follow_redirects=True, **kwargs)
+        if resp.status_code >= 400:
+            raise GitHubError(f"GitHub returned HTTP {resp.status_code} for {path}: {resp.text[:300]}")
+        return resp
 
     def _post(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         resp = self._http.post(GRAPHQL_URL, json={"query": query, "variables": variables})

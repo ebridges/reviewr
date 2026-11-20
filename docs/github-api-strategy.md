@@ -130,8 +130,12 @@ the cached JSON is easy to inspect when something looks wrong.
 | D8 | All GitHub data is cached in SQLite; UI navigation never calls GitHub | Rate limit and DX |
 | D9 | Token from `gh auth token`, `GITHUB_TOKEN` overrides | DX |
 | D10 | `httpx` client, queries in `.graphql` files | DX |
+| D11 | CI job logs and job re-runs use REST | Capability: GraphQL has no endpoint for Actions logs or re-runs |
 
-REST is not used in the current design. It becomes useful again only for D4's
+REST is used only for D11. Failing checks and their annotations still come from
+GraphQL (`ci_checks.graphql`, cost 1). A log is downloaded only for a failing job,
+once, when you analyze the failures, and cached by job id; a re-run is one request
+per job you confirm. Otherwise REST would become useful again only for D4's
 background-polling case described above.
 
 [rest]: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api

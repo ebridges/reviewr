@@ -55,6 +55,22 @@ from main** follows the same pattern as review comments:
    changed and you're told why. Pushing is a separate, confirmed step (or Respond pushes
    it with your replies).
 
+## Fixing failing CI
+
+When a PR's checks fail, the workflow switch shows **Fix CI** with the number failing.
+It follows the same steps:
+
+1. **Start.** The failing checks on the PR's latest commit, from one GraphQL query.
+   **Analyze failures** downloads each failing job's log (REST; GraphQL has no logs,
+   see D11 in `docs/github-api-strategy.md`) and keeps the step that failed.
+2. **Triage.** The AI sorts the failures into *fix in this PR*, *re-run* (flaky or
+   infrastructure) and *not this PR*, with the cause and the files to change.
+3. **Fix.** One card per failure with GitHub's annotations and the failing step's log.
+   Ask the AI for a fix (it works in a throwaway worktree; you see the diff, and Apply
+   commits it to your checkout), re-run the job on GitHub, mark it fixed yourself, or
+   dismiss it. Re-runs ask for confirmation.
+4. **Finish.** Push the fix commits (with confirmation); CI runs again on GitHub.
+
 ## Setup
 
 Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 20+, the `gh` CLI
@@ -115,6 +131,7 @@ backend/reviewr/
   llm/                        Claude calls: triage suggestions, replies, planning, patch checks
   agent.py, fixwork.py        drafting work items with the Agent SDK, committing
   merge.py, llm/conflicts.py  updating from main: merge worktree, conflicts, AI triage
+  ci.py, llm/ci.py            fixing failing CI: checks, log excerpts, AI triage, fixes
   submit.py                   the Respond step: dry run and posting
   api.py                      FastAPI routes used by the frontend
 frontend/src/pages/           one file per step, plus Settings

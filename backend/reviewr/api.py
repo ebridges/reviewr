@@ -17,12 +17,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from reviewr import ai, cleanup, envs, fixwork, git, jira, merge, submit
+from reviewr import ai, ci, cleanup, envs, fixwork, git, jira, merge, submit
 from reviewr.agent import agent_prompt
 from reviewr.config import DOTENV_KEYS, load_config, load_dotenv
 from reviewr.editor import EditorError, open_in_editor
 from reviewr.github import GitHubClient, GitHubError, fetch_pull_request
 from reviewr.github.fetch import PR_LISTS, close_pull_request, list_pull_requests, set_draft
+from reviewr.llm import ci as ci_ai
 from reviewr.llm import conflicts as conflict_ai
 from reviewr.llm.client import LLMError
 from reviewr.llm.planning import make_plan
@@ -803,6 +804,123 @@ def delete_merge(owner: str, repo: str, number: int) -> MergeView:
     cfg, pr = _pr_cfg(owner, repo, number)
     merge.discard(cfg, pr)
     return MergeView(session=None)
+
+
+# Fix CI: failing checks, triaged and fixed (ci.py)
+
+def _ci_call(fn, *args):
+    try:
+        return fn(*args)
+    except ci.CIError as e:
+        raise HTTPException(409, str(e)) from e
+    except GitHubError as e:
+        raise HTTPException(502, str(e)) from e
+    except git.GitError as e:
+        raise HTTPException(400, str(e)) from e
+    except LLMError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+class CIView(BaseModel):
+    session: ci.CISession | None
+
+
+def _ci_analyze(cfg, pr: PullRequest):
+    try:
+        changed = [f.path for f in git.changed_files(cfg.repo_path(pr.ref.slug), pr.base_oid, pr.head_oid)]
+    except git.GitError:
+        changed = []
+    return ci_ai.analyze(cfg.llm, pr.title, changed)
+
+
+@app.get(PR + "/ci/status")
+def get_ci_status(owner: str, repo: str, number: int, fresh: bool = False) -> dict:
+    """The PR's CI state and failing checks; cached for a minute."""
+    pr = _load_pr(_ref(owner, repo, number))
+    return _ci_call(ci.status, github(), pr, fresh)
+
+
+@app.get(PR + "/ci")
+def get_ci(owner: str, repo: str, number: int) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=ci.load_current(cfg, pr))
+
+
+@app.post(PR + "/ci/start")
+def post_ci_start(owner: str, repo: str, number: int) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.start, cfg, pr, github(), _ci_analyze(cfg, pr)))
+
+
+@app.post(PR + "/ci/reanalyze")
+def post_ci_reanalyze(owner: str, repo: str, number: int) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.reanalyze, cfg, pr, github(), _ci_analyze(cfg, pr)))
+
+
+class FailurePatch(BaseModel):
+    category: Literal["fix", "rerun", "unrelated"] | None = None
+    status: Literal["open", "fixed", "dismissed"] | None = None
+
+
+@app.patch(PR + "/ci/failures/{failure_id}")
+def patch_ci_failure(owner: str, repo: str, number: int, failure_id: str, req: FailurePatch) -> CIView:
+    """Recategorize a failure, or mark it fixed by you, dismissed, or open again."""
+    cfg, pr = _pr_cfg(owner, repo, number)
+
+    def change(s: ci.CISession) -> None:
+        f = s.failures.get(failure_id)
+        if f is None:
+            raise ci.CIError("Unknown failure.")
+        if req.category:
+            f.category = req.category
+        if req.status:
+            f.status = req.status
+
+    return CIView(session=_ci_call(ci.update, cfg, pr, change))
+
+
+@app.post(PR + "/ci/failures/{failure_id}/fix")
+def post_ci_fix(owner: str, repo: str, number: int, failure_id: str) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    name = "Codex" if ai.current() == "codex" else "Claude"
+    return CIView(session=_ci_call(ci.start_fix, cfg, pr, failure_id, name))
+
+
+@app.post(PR + "/ci/failures/{failure_id}/fix/apply")
+def post_ci_fix_apply(owner: str, repo: str, number: int, failure_id: str) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.apply_fix, cfg, pr, failure_id))
+
+
+@app.delete(PR + "/ci/failures/{failure_id}/fix")
+def delete_ci_fix(owner: str, repo: str, number: int, failure_id: str) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.discard_fix, cfg, pr, failure_id))
+
+
+@app.post(PR + "/ci/failures/{failure_id}/rerun")
+def post_ci_rerun(owner: str, repo: str, number: int, failure_id: str, req: ConfirmRequest) -> CIView:
+    """Re-run a failed job on GitHub. Only after the user confirms."""
+    if not req.confirm:
+        raise HTTPException(400, "Re-running a job needs confirmation.")
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.rerun, cfg, pr, github(), failure_id))
+
+
+@app.post(PR + "/ci/push")
+def post_ci_push(owner: str, repo: str, number: int, req: ConfirmRequest) -> CIView:
+    if not req.confirm:
+        raise HTTPException(400, "Pushing needs confirmation.")
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return CIView(session=_ci_call(ci.push, cfg, pr))
+
+
+@app.delete(PR + "/ci")
+def delete_ci(owner: str, repo: str, number: int) -> CIView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    ci.discard(cfg, pr)
+    return CIView(session=None)
 
 
 @app.get("/api/cleanup")
