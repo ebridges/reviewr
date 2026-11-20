@@ -421,6 +421,41 @@ class JiraRequest(BaseModel):
     thread_ids: list[str] | None = None  # None: deferred threads not already in an issue
 
 
+class OwnFixRequest(BaseModel):
+    failure: str
+    label: str = ""
+
+
+def _plan_call(fn, *args):
+    try:
+        return fn(*args)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(409, str(e)) from e
+    except git.GitError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post(PR + "/plan/{item_id}/fix")
+def post_own_fix(owner: str, repo: str, number: int, item_id: int, req: OwnFixRequest) -> ReviewState:
+    """Ask the agent to fix failing checks on your own uncommitted changes."""
+    ref = _ref(owner, repo, number)
+    _repo_path(ref)
+    name = "Codex" if ai.current() == "codex" else "Claude"
+    return _plan_call(fixwork.start_own_fix, store(), load_config(), _load_pr(ref), item_id, req.failure, name, req.label)
+
+
+@app.post(PR + "/plan/{item_id}/fix/apply")
+def post_own_fix_apply(owner: str, repo: str, number: int, item_id: int) -> ReviewState:
+    ref = _ref(owner, repo, number)
+    return _plan_call(fixwork.apply_own_fix, store(), load_config(), _load_pr(ref), item_id)
+
+
+@app.delete(PR + "/plan/{item_id}/fix")
+def delete_own_fix(owner: str, repo: str, number: int, item_id: int) -> ReviewState:
+    ref = _ref(owner, repo, number)
+    return _plan_call(fixwork.discard_own_fix, store(), load_config(), _load_pr(ref), item_id)
+
+
 @app.post(PR + "/jira")
 def post_jira(owner: str, repo: str, number: int, req: JiraRequest) -> ReviewState:
     """Create one Jira issue for deferred threads. This writes to Jira."""
@@ -687,6 +722,31 @@ def get_merge_diff(owner: str, repo: str, number: int, path: str) -> dict:
 def post_merge_checks(owner: str, repo: str, number: int) -> MergeView:
     cfg, pr = _pr_cfg(owner, repo, number)
     return _merge_view(_merge_call(merge.start_checks, cfg, pr))
+
+
+class FixRequest(BaseModel):
+    failure: str
+    label: str = ""
+
+
+@app.post(PR + "/merge/fix")
+def post_merge_fix(owner: str, repo: str, number: int, req: FixRequest) -> MergeView:
+    """Ask the coding agent to fix failing checks or commit hooks in the merge."""
+    cfg, pr = _pr_cfg(owner, repo, number)
+    name = "Codex" if ai.current() == "codex" else "Claude"
+    return _merge_view(_merge_call(merge.start_fix, cfg, pr, req.failure, name, req.label))
+
+
+@app.post(PR + "/merge/fix/apply")
+def post_merge_fix_apply(owner: str, repo: str, number: int) -> MergeView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return _merge_view(_merge_call(merge.apply_fix, cfg, pr))
+
+
+@app.delete(PR + "/merge/fix")
+def delete_merge_fix(owner: str, repo: str, number: int) -> MergeView:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return _merge_view(_merge_call(merge.discard_fix, cfg, pr))
 
 
 class MergeCommitRequest(BaseModel):

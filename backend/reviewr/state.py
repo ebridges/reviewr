@@ -62,6 +62,18 @@ class ThreadCheck(BaseModel):
     note: str
 
 
+class ProposedFix(BaseModel):
+    """A change the coding agent proposes to make failing checks pass on your own
+    uncommitted edits. Nothing touches your checkout until you apply it."""
+    status: Literal["running", "ready", "failed"]
+    failure: str
+    label: str = ""  # what failed, e.g. "Backend tests (pytest)" or "commit hooks"
+    ai_name: str
+    diff: str = ""
+    summary: str = ""
+    error: str | None = None
+
+
 class WorkItem(BaseModel):
     id: int
     title: str
@@ -77,6 +89,7 @@ class WorkItem(BaseModel):
     prompt: str | None = None  # your edited agent prompt; None means the generated default
     check_report: CheckReport | None = None
     checks_running: bool = False
+    proposed_fix: ProposedFix | None = None
 
 
 class ReviewState(BaseModel):

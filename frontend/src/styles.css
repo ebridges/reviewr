@@ -346,7 +346,7 @@ textarea.input { resize: vertical; }
 .code .sign { display: inline-block; width: 16px; color: var(--fg-muted); user-select: none; }
 .file-diff { border-top: 1px solid var(--border); padding: 8px 0; }
 .file-diff summary { cursor: pointer; list-style: revert; }
-.error-box { color: var(--warn); }
+.error-box { color: var(--warn); max-height: 420px; overflow-y: auto; }
 .error-box div { white-space: pre-wrap; }
 
 /* Keyboard shortcut help */
@@ -356,7 +356,18 @@ textarea.input { resize: vertical; }
 .help-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 260px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); text-align: left; }
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
 .card-top .key-help { margin-top: -4px; }
+.pre-wrap { white-space: pre-wrap; }
+.fix-card { border-color: var(--accent-soft-border); }
+
+/* Fix: item navigator, long paths */
+.item-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.btn.disabled { opacity: 0.4; pointer-events: none; }
+.checks .mono { overflow-wrap: anywhere; text-align: left; }
+.check-run .link { align-self: flex-start; }
 .stack-tight { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.prompt-edit { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+.review-thread + .review-thread { border-top: 1px solid var(--border); padding-top: 12px; }
+.pad-top { padding-top: 12px; }
 .small .threads-link { padding: 0; font-size: inherit; }
 
 /* Decision categories: one color each, used for dots, group edges and suggestion chips */

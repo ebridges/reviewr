@@ -30,10 +30,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from reviewr import fixwork, git
+from reviewr import envs, fixwork, git
 from reviewr.checks import CheckReport, run_checks
 from reviewr.config import Config
 from reviewr.fixwork import _failed_report
+from reviewr.jobs import Jobs
 from reviewr.models import PullRequest
 
 log = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ FETCH_INTERVAL_S = 300
 _lock = threading.RLock()
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="merge")
 _last_fetch: dict[tuple[str, str], float] = {}
-_jobs: set[str] = set()  # sessions with a triage or checks job running in this process
+_jobs = Jobs()  # PRs with a triage, checks or fix job running in this process
 
 
 class MergeError(RuntimeError):
@@ -103,6 +104,19 @@ class MergeFile(BaseModel):
     main_commits: list[Commit] = Field(default_factory=list)
 
 
+class MergeFix(BaseModel):
+    """A change the coding agent proposes to make failing checks or commit hooks pass.
+    It sits unstaged in the merge worktree until you apply it (staged into the merge) or
+    discard it."""
+    status: Literal["running", "ready", "failed", "applied"]
+    failure: str
+    label: str = ""  # what failed, e.g. "Backend tests (pytest)" or "commit hooks"
+    ai_name: str
+    diff: str = ""
+    summary: str = ""
+    error: str | None = None
+
+
 class MergeSession(BaseModel):
     base_ref: str
     base_sha: str
@@ -121,6 +135,8 @@ class MergeSession(BaseModel):
     pushed: bool = False
     check_report: CheckReport | None = None
     checks_running: bool = False
+    fix: MergeFix | None = None
+    fixed_paths: list[str] = Field(default_factory=list)  # changed by an applied fix; not rewritten from resolutions
 
 
 # Paths and persistence
@@ -158,6 +174,9 @@ def load_current(cfg: Config, pr: PullRequest) -> MergeSession | None:
             if s.status == "analyzing":
                 s.status, s.error = "ready", "Triage was interrupted because reviewr restarted. Try again to finish it."
             s.checks_running = False
+            _save(cfg, pr, s)
+        if s and pr.ref.key not in _jobs and s.fix and s.fix.status == "running":
+            s.fix.status, s.fix.error = "failed", "Interrupted because reviewr restarted. Ask again."
             _save(cfg, pr, s)
         return s
 
@@ -427,7 +446,7 @@ def _write_file(tree: Path, s: MergeSession, f: MergeFile) -> None:
     if f.kind != "text":
         c = conflicts[0]
         if c.choice == "delete":
-            git._git(tree, "rm", "--quiet", "-f", "--", f.path)
+            git._git(tree, "rm", "--quiet", "-f", "--ignore-unmatch", "--", f.path)
         else:
             git._git(tree, "checkout", "--ours" if c.choice == "ours" else "--theirs", "--", f.path)
             git._git(tree, "add", "--", f.path)
@@ -439,10 +458,17 @@ def _write_file(tree: Path, s: MergeSession, f: MergeFile) -> None:
 
 
 def write_resolved(cfg: Config, pr: PullRequest, s: MergeSession, paths: set[str] | None = None) -> None:
+    """Write resolved files into the merge worktree. With `paths` (a resolution in those
+    files changed) they're rewritten even if an applied fix had changed them; without, files
+    an applied fix changed are left as they are."""
     tree = tree_path(cfg, pr)
     for f in s.files:
+        if paths is None and f.path in s.fixed_paths:
+            continue
         if paths is None or f.path in paths:
             _write_file(tree, s, f)
+            if f.path in s.fixed_paths:
+                s.fixed_paths.remove(f.path)
 
 
 def file_diff(cfg: Config, pr: PullRequest, path: str) -> str:
@@ -516,7 +542,6 @@ def reanalyze(cfg: Config, pr: PullRequest, analyze) -> MergeSession:
 
 
 def _analyze_job(cfg: Config, pr: PullRequest, analyze, ids: list[str]) -> None:
-    _jobs.add(pr.ref.key)
     try:
         s = load(cfg, pr)
         results = analyze(s, [s.conflicts[i] for i in ids])
@@ -556,7 +581,6 @@ def start_checks(cfg: Config, pr: PullRequest) -> MergeSession:
 
 
 def _checks_job(cfg: Config, pr: PullRequest, paths: list[str]) -> None:
-    _jobs.add(pr.ref.key)
     tree = tree_path(cfg, pr)
     try:
         patch = git._git(tree, "diff", "HEAD", "--", *paths, check=False).stdout
@@ -580,6 +604,8 @@ def commit(cfg: Config, pr: PullRequest, message: str) -> MergeSession:
         s = load(cfg, pr)
         if not s or s.status == "committed":
             raise MergeError("There's no update from main to commit.")
+        if s.fix and s.fix.status in ("running", "ready"):
+            raise MergeError("Apply or discard the proposed fix before committing.")
         if open_ := [c for c in s.conflicts.values() if not c.resolved]:
             raise MergeError(f"{len(open_)} conflict{'s' if len(open_) != 1 else ''} still unresolved.")
         work = fixwork.work_worktree(cfg, pr)
@@ -604,6 +630,120 @@ def commit(cfg: Config, pr: PullRequest, message: str) -> MergeSession:
         s.status, s.commit_sha = "committed", sha
         _save(cfg, pr, s)
         git.remove_worktree(cfg.repo_path(pr.ref.slug), tree)
+        return s
+
+
+# Proposed fixes for failing checks or hooks
+
+def _unstaged_diff(cfg: Config, pr: PullRequest) -> str:
+    """What the agent changed: the staged merge (your resolutions) is the baseline."""
+    return git.unstaged_diff(tree_path(cfg, pr), envs.provided_paths(cfg.repos[pr.ref.slug]))
+
+
+def _fix_prompt(s: MergeSession, pr: PullRequest, failure: str) -> str:
+    choices = []
+    for c in s.conflicts.values():
+        where = f"{c.path}:{c.start_line}" if c.start_line and c.kind == "text" else c.path
+        choices.append(f"- {where}: {c.choice} ({c.title or 'conflict'})")
+    return f"""You're helping finish a merge of {s.base_ref} into {s.head_ref}, the branch of the
+pull request "{pr.title}". The merge is in progress in the current directory. These
+conflicts were resolved (ours = the PR's side, theirs = {s.base_ref}'s side):
+{chr(10).join(choices)}
+
+These checks failed on the merged code:
+<failures>
+{failure.strip()[-12000:]}
+</failures>
+
+Change the files so the failures are fixed. Keep what both sides intended and make the
+smallest change that works. Edit files only. Don't run git commands that change the
+repository (no add, commit, checkout, restore, stash, reset or merge): the merge state
+must stay as it is. When you're done, say in two or three sentences what you changed
+and why."""
+
+
+def start_fix(cfg: Config, pr: PullRequest, failure: str, ai_name: str, label: str = "") -> MergeSession:
+    from reviewr.agent import run_agent  # the Agent SDK import is slow; only load it when needed
+
+    if not failure.strip():
+        raise MergeError("There's no failure to fix.")
+    s = load(cfg, pr)
+    if not s or s.status == "committed":
+        raise MergeError("There's no update from main in progress.")
+    if s.fix and s.fix.status in ("running", "ready"):
+        raise MergeError("A proposed fix is already pending. Apply or discard it first.")
+    if not all(c.resolved for c in s.conflicts.values()):
+        raise MergeError("Resolve every conflict first.")
+    with _lock:
+        write_resolved(cfg, pr, s)
+    # Unstaged changes here can only be formatting your commit hooks made on an earlier
+    # try, which the commit would include anyway. Stage them so the agent's change can be
+    # told apart.
+    if leftover := git.patch_paths(_unstaged_diff(cfg, pr)):
+        log.info("Staging earlier hook changes before proposing a fix: %s", leftover)
+        git._git(tree_path(cfg, pr), "add", "-A", "--", *leftover)
+
+    def mark(s: MergeSession) -> None:
+        s.fix = MergeFix(status="running", failure=failure, ai_name=ai_name, label=label)
+
+    s = update(cfg, pr, mark)
+    _jobs.add(pr.ref.key)
+    _executor.submit(_fix_job, cfg, pr, _fix_prompt(s, pr, failure), run_agent)
+    return s
+
+
+def _fix_job(cfg: Config, pr: PullRequest, prompt: str, run_agent) -> None:
+    try:
+        output = run_agent(tree_path(cfg, pr), prompt, cfg.llm.model)
+        diff = _unstaged_diff(cfg, pr)
+
+        def done(s: MergeSession) -> None:
+            if s.fix:
+                s.fix.status, s.fix.diff, s.fix.summary, s.fix.error = "ready", diff, output.strip()[-2000:], None
+
+        update(cfg, pr, done)
+    except Exception as e:  # shown on the page
+        log.exception("Proposing a fix for the merge failed")
+        message = str(e) or type(e).__name__
+
+        def failed(s: MergeSession) -> None:
+            if s.fix:
+                s.fix.status, s.fix.error = "failed", message
+
+        update(cfg, pr, failed)
+    finally:
+        _jobs.discard(pr.ref.key)
+
+
+def apply_fix(cfg: Config, pr: PullRequest) -> MergeSession:
+    """Stage the proposed fix into the merge. Check results are cleared: they were for
+    the code before the fix."""
+    with _lock:
+        s = load(cfg, pr)
+        if not s or not s.fix or s.fix.status != "ready":
+            raise MergeError("There's no proposed fix to apply.")
+        if paths := git.patch_paths(s.fix.diff):
+            git._git(tree_path(cfg, pr), "add", "-A", "--", *paths)
+            s.fixed_paths = sorted(set(s.fixed_paths) | set(paths))
+        s.fix.status, s.check_report = "applied", None
+        _save(cfg, pr, s)
+        return s
+
+
+def discard_fix(cfg: Config, pr: PullRequest) -> MergeSession:
+    """Undo the agent's unstaged changes; the merge as you resolved it is left as it was."""
+    with _lock:
+        s = load(cfg, pr)
+        if not s or not s.fix or s.fix.status == "running":
+            raise MergeError("There's no proposed fix to discard.")
+        tree = tree_path(cfg, pr)
+        for path in git.patch_paths(s.fix.diff):
+            if git._git(tree, "ls-files", "--error-unmatch", "--", path, check=False).returncode == 0:
+                git._git(tree, "checkout", "--", path)
+            elif (tree / path).is_file():
+                (tree / path).unlink()
+        s.fix = None
+        _save(cfg, pr, s)
         return s
 
 

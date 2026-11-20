@@ -1,4 +1,5 @@
 // Types mirror backend/reviewr/models.py, state.py and submit.py.
+import type { ProposedFixData } from "./components/ProposedFix";
 
 export interface PRRef { owner: string; repo: string; number: number }
 
@@ -78,6 +79,7 @@ export interface WorkItem {
   prompt: string | null;
   check_report: CheckReport | null;
   checks_running: boolean;
+  proposed_fix: ProposedFixData | null;
 }
 
 export interface CheckRun {
@@ -218,6 +220,16 @@ export interface MergeFile {
   main_commits: MergeCommit[];
 }
 
+export interface MergeFix {
+  status: "running" | "ready" | "failed" | "applied";
+  failure: string;
+  label: string;
+  ai_name: string;
+  diff: string;
+  summary: string;
+  error: string | null;
+}
+
 export interface MergeSession {
   base_ref: string;
   base_sha: string;
@@ -236,6 +248,8 @@ export interface MergeSession {
   pushed: boolean;
   check_report: CheckReport | null;
   checks_running: boolean;
+  fix: MergeFix | null;
+  fixed_paths: string[];
 }
 
 export interface MergeView { session: MergeSession | null; options: Record<string, ConflictOption[]> }
@@ -307,6 +321,10 @@ export const api = {
   installEnvs: (r: PRRef) => call<EnvStatus[]>(`${base(r)}/envs/install`, send("POST")),
   work: (r: PRRef) => call<WorkStatus>(`${base(r)}/work`),
   workDiff: (r: PRRef) => call<{ diff: string; worktree: string }>(`${base(r)}/work/diff`),
+  ownFix: (r: PRRef, id: number, failure: string, label: string) =>
+    call<ReviewState>(`${base(r)}/plan/${id}/fix`, send("POST", { failure, label })),
+  ownFixApply: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/fix/apply`, send("POST")),
+  ownFixDiscard: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/fix`, send("DELETE")),
   check: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/check`, send("POST")),
   commitOwn: (r: PRRef, id: number, message: string, paths: string[]) =>
     call<ReviewState>(`${base(r)}/plan/${id}/commit`, send("POST", { message, paths })),
@@ -327,6 +345,9 @@ export const api = {
     call<MergeView>(`${base(r)}/merge/conflicts/${encodeURIComponent(id)}/propose`, send("POST", { instruction })),
   mergeDiff: (r: PRRef, path: string) => call<{ diff: string }>(`${base(r)}/merge/diff?path=${encodeURIComponent(path)}`),
   mergeChecks: (r: PRRef) => call<MergeView>(`${base(r)}/merge/checks`, send("POST")),
+  mergeFix: (r: PRRef, failure: string, label: string) => call<MergeView>(`${base(r)}/merge/fix`, send("POST", { failure, label })),
+  mergeFixApply: (r: PRRef) => call<MergeView>(`${base(r)}/merge/fix/apply`, send("POST")),
+  mergeFixDiscard: (r: PRRef) => call<MergeView>(`${base(r)}/merge/fix`, send("DELETE")),
   mergeCommit: (r: PRRef, message: string) => call<MergeView>(`${base(r)}/merge/commit`, send("POST", { message })),
   mergePush: (r: PRRef) => call<MergeView>(`${base(r)}/merge/push`, send("POST", { confirm: true })),
   mergeDiscard: (r: PRRef) => call<MergeView>(`${base(r)}/merge`, send("DELETE")),

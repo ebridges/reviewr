@@ -62,7 +62,7 @@ export function usePR(ref: PRRef) {
     queryKey: key,
     queryFn: () => api.pr(ref),
     refetchInterval: (query) =>
-      query.state.data?.state.plan.some((w) => w.status === "drafting" || w.checks_running) ? 3000 : false,
+      query.state.data?.state.plan.some((w) => w.status === "drafting" || w.checks_running || w.proposed_fix?.status === "running") ? 3000 : false,
   });
   const setState = (state: ReviewState) =>
     qc.setQueryData<PRView>(key, (old) => (old ? { ...old, state } : old));

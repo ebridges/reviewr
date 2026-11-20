@@ -27,7 +27,7 @@ from reviewr.checks import CheckReport, CheckRun, run_checks
 from reviewr.config import Config
 from reviewr.llm.check import check_patch
 from reviewr.models import PullRequest
-from reviewr.state import ReviewState
+from reviewr.state import ProposedFix, ReviewState
 from reviewr.store import Store
 
 log = logging.getLogger(__name__)
@@ -52,11 +52,11 @@ def _submit(pr: PullRequest, item_id: int, fn, *args) -> None:
 
 
 def recover_interrupted(store: Store, pr: PullRequest) -> None:
-    """Drafts and checks whose job isn't running in this process were cut
+    """Drafts, checks and proposed fixes whose job isn't running in this process were cut
     off by a restart. Mark them so they can be started again instead of waiting forever."""
     state = store.get_state(pr.ref)
     stuck = [w.id for w in state.plan if (pr.ref.key, w.id) not in _running and (
-        w.status == "drafting" or w.checks_running)]
+        w.status == "drafting" or w.checks_running or (w.proposed_fix and w.proposed_fix.status == "running"))]
     if not stuck:
         return
 
@@ -67,6 +67,8 @@ def recover_interrupted(store: Store, pr: PullRequest) -> None:
             if w.status == "drafting":
                 w.status, w.error = "failed", "Interrupted because reviewr restarted. Draft it again."
             w.checks_running = False
+            if w.proposed_fix and w.proposed_fix.status == "running":
+                w.proposed_fix.status, w.proposed_fix.error = "failed", "Interrupted because reviewr restarted. Ask again."
 
     store.update_state(pr.ref, mark)
 
@@ -337,3 +339,102 @@ def commit_own_changes(store: Store, cfg: Config, pr: PullRequest, item_id: int,
         it.status, it.commit_sha = "committed", sha
 
     return store.update_state(pr.ref, committed)
+
+
+# Proposed fixes for failing checks on your own changes
+
+def _own_fix_prompt(pr: PullRequest, title: str, instruction: str, failure: str) -> str:
+    return f"""The author of the pull request "{pr.title}" is working on this change: {title}.
+{f"Their note: {instruction}" if instruction else ""}
+Their uncommitted changes are already in the current directory. These checks failed on them:
+<failures>
+{failure.strip()[-12000:]}
+</failures>
+
+Change the files so the failures are fixed, keeping what the author was doing, with the
+smallest change that works. Edit files only. Don't run git commands that change the
+repository (no add, commit, checkout, restore, stash or reset). When you're done, say in
+two or three sentences what you changed and why."""
+
+
+def start_own_fix(store: Store, cfg: Config, pr: PullRequest, item_id: int, failure: str, ai_name: str, label: str = "") -> ReviewState:
+    """Have the agent fix failing checks on a copy of your uncommitted changes. The result
+    is a diff on top of them, shown to you before anything changes in your checkout."""
+    item = store.get_state(pr.ref).item(item_id)
+    if item.status == "committed":
+        raise ValueError("This work item is already committed.")
+    if item.proposed_fix and item.proposed_fix.status in ("running", "ready"):
+        raise ValueError("A proposed fix is already waiting. Apply or discard it first.")
+    if not failure.strip():
+        raise ValueError("There's no failure to fix.")
+    work = work_worktree(cfg, pr)
+    patch = git.working_diff(work, exclude=_excluded(cfg, pr))
+    base = git.head_sha(work)
+
+    def mark(s: ReviewState) -> None:
+        s.item(item_id).proposed_fix = ProposedFix(status="running", failure=failure, ai_name=ai_name, label=label)
+
+    state = store.update_state(pr.ref, mark)
+    _submit(pr, item_id, _own_fix_job, store, cfg, pr, item_id, base, patch,
+                     _own_fix_prompt(pr, item.title, item.instruction, failure))
+    return state
+
+
+def _own_fix_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, base: str, patch: str, prompt: str) -> None:
+    repo_cfg = cfg.repos[pr.ref.slug]
+    scratch = _root(cfg, pr) / "drafts" / f"ownfix-{item_id}"
+    try:
+        git.create_draft_worktree(repo_cfg.path, scratch, base)
+        if patch.strip():
+            git.apply_to_worktree(scratch, patch)
+        git._git(scratch, "add", "-A")  # your changes become the baseline; the agent's are on top
+        output = run_agent(scratch, prompt, cfg.llm.model)
+        diff = git.unstaged_diff(scratch, envs.provided_paths(repo_cfg))
+
+        def done(s: ReviewState) -> None:
+            if f := s.item(item_id).proposed_fix:
+                f.status, f.diff, f.summary, f.error = "ready", diff, output.strip()[-2000:], None
+
+        store.update_state(pr.ref, done)
+    except Exception as e:  # shown on the work item
+        log.exception("Proposing a fix for item %s failed", item_id)
+        message = str(e) or type(e).__name__
+
+        def failed(s: ReviewState) -> None:
+            if f := s.item(item_id).proposed_fix:
+                f.status, f.error = "failed", message
+
+        store.update_state(pr.ref, failed)
+    finally:
+        git.remove_worktree(repo_cfg.path, scratch)
+
+
+def apply_own_fix(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> ReviewState:
+    """Write the proposed change into your checkout as uncommitted edits."""
+    fix = store.get_state(pr.ref).item(item_id).proposed_fix
+    if not fix or fix.status != "ready":
+        raise ValueError("There's no proposed fix to apply.")
+    if fix.diff.strip():
+        try:
+            git.apply_to_worktree(work_worktree(cfg, pr), fix.diff)
+        except git.GitError as e:
+            raise ValueError(
+                "The fix no longer applies: the files it changes were edited since it was proposed. "
+                "Discard it and ask again."
+            ) from e
+
+    def applied(s: ReviewState) -> None:
+        it = s.item(item_id)
+        it.proposed_fix, it.check_report = None, None  # the results were for the code before the fix
+
+    return store.update_state(pr.ref, applied)
+
+
+def discard_own_fix(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> ReviewState:
+    def clear(s: ReviewState) -> None:
+        it = s.item(item_id)
+        if it.proposed_fix and it.proposed_fix.status == "running":
+            raise ValueError("The agent is still working on it.")
+        it.proposed_fix = None
+
+    return store.update_state(pr.ref, clear)

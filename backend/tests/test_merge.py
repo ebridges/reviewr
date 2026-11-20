@@ -227,6 +227,101 @@ def test_commit_reports_failing_hooks(setup):
     assert sh(clone, "rev-parse", "HEAD").strip() == head  # your checkout didn't move
 
 
+def _wait(cfg, pr, done):
+    for _ in range(200):
+        s = merge.load(cfg, pr)
+        if done(s):
+            return s
+        time.sleep(0.05)
+    raise AssertionError("background job didn't finish")
+
+
+def _fake_agent(monkeypatch, edit):
+    import reviewr.agent
+
+    def run(worktree, prompt, model):
+        assert "lint: bad quotes" in prompt and "app.py" in prompt
+        edit(Path(worktree))
+        return "Changed the quotes in app.py."
+
+    monkeypatch.setattr(reviewr.agent, "run_agent", run)
+
+
+def test_fix_applied_is_committed(setup, monkeypatch):
+    cfg, pr, clone = setup
+    merge.start(cfg, pr, no_ai)
+    _resolve_all(cfg, pr)
+    _fake_agent(monkeypatch, lambda t: (t / "app.py").write_text((t / "app.py").read_text().replace("'", '"')))
+    merge.start_fix(cfg, pr, "lint: bad quotes in app.py", "Claude")
+    s = _wait(cfg, pr, lambda s: s.fix.status != "running")
+    assert s.fix.status == "ready" and "app.py" in s.fix.diff and s.fix.summary.startswith("Changed")
+    with pytest.raises(merge.MergeError, match="Apply or discard"):
+        merge.commit(cfg, pr, "m")
+    merge.apply_fix(cfg, pr)
+    s = merge.commit(cfg, pr, "Merge main")
+    assert "'" not in (clone / "app.py").read_text()  # the fix survived rewriting resolved files
+
+
+def test_fix_discarded_restores_merge(setup, monkeypatch):
+    cfg, pr, _clone = setup
+    merge.start(cfg, pr, no_ai)
+    _resolve_all(cfg, pr)
+    tree = merge.tree_path(cfg, pr)
+    _fake_agent(monkeypatch, lambda t: ((t / "app.py").write_text("broken\n"), (t / "extra.py").write_text("x\n")))
+    merge.start_fix(cfg, pr, "lint: bad quotes in app.py", "Codex")
+    s = _wait(cfg, pr, lambda s: s.fix.status != "running")
+    assert "extra.py" in s.fix.diff
+    merge.discard_fix(cfg, pr)
+    resolved = sh(tree, "show", ":app.py")  # the staged resolution
+    assert (tree / "app.py").read_text() == resolved and "broken" not in resolved and not (tree / "extra.py").exists()
+    assert merge.load(cfg, pr).fix is None
+
+
+def test_own_fix_proposed_then_applied(setup, monkeypatch, tmp_path):
+    """Fix page, your own changes: the agent works on a copy; your checkout changes only on Apply."""
+    from reviewr import fixwork
+    from reviewr.state import ProposedFix, WorkItem
+    from reviewr.store import Store
+
+    cfg, pr, clone = setup
+    st = Store(tmp_path / "s.sqlite3")
+    st.update_state(pr.ref, lambda s: s.plan.append(WorkItem(id=1, title="Say hello", thread_ids=[], mode="me")))
+    write(clone, {"app.py": (clone / "app.py").read_text() + "MSG = 'hi'\n"})  # your uncommitted edit
+    head = sh(clone, "rev-parse", "HEAD").strip()
+
+    import reviewr.agent
+
+    def agent(worktree, prompt, model):
+        assert "lint: quotes" in prompt and "Say hello" in prompt
+        p = Path(worktree) / "app.py"
+        assert "MSG = 'hi'" in p.read_text()  # your edit is there for the agent
+        p.write_text(p.read_text().replace("MSG = 'hi'", 'MSG = "hi"'))
+        return "Used double quotes."
+
+    monkeypatch.setattr(reviewr.agent, "run_agent", agent)
+    monkeypatch.setattr(fixwork, "run_agent", agent)
+    fixwork.start_own_fix(st, cfg, pr, 1, "lint: quotes in app.py", "Claude")
+    for _ in range(200):
+        f = st.get_state(pr.ref).item(1).proposed_fix
+        if f.status != "running":
+            break
+        time.sleep(0.05)
+    assert f.status == "ready" and "+MSG = \"hi\"" in f.diff and "-MSG = 'hi'" in f.diff
+    assert "MSG = 'hi'" in (clone / "app.py").read_text()  # untouched until you apply
+
+    fixwork.apply_own_fix(st, cfg, pr, 1)
+    assert 'MSG = "hi"' in (clone / "app.py").read_text()
+    assert sh(clone, "rev-parse", "HEAD").strip() == head  # applied as uncommitted edits
+    assert st.get_state(pr.ref).item(1).proposed_fix is None
+
+    # A proposal that no longer applies is refused, and your file is left alone.
+    stale = ProposedFix(status="ready", failure="x", ai_name="Claude", diff=f.diff)  # already applied once
+    st.update_state(pr.ref, lambda s: setattr(s.item(1), "proposed_fix", stale))
+    with pytest.raises(ValueError, match="no longer applies"):
+        fixwork.apply_own_fix(st, cfg, pr, 1)
+    assert 'MSG = "hi"' in (clone / "app.py").read_text()
+
+
 def test_agent_prompt_is_readable_and_editable(setup):
     """The Fix page shows this prompt; an edited one replaces it when drafting."""
     from reviewr.agent import agent_prompt, prompt_for

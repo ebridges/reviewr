@@ -272,6 +272,17 @@ def working_diff(worktree: Path, exclude: list[str] | tuple[str, ...] = ()) -> s
     return "".join(parts)
 
 
+def unstaged_diff(worktree: Path, exclude: list[str] | tuple[str, ...] = ()) -> str:
+    """Changes not yet staged (working tree against the index), new files included. Used
+    where the index holds a baseline and an agent's edits are what's on top of it."""
+    excl = [f":(exclude){p}" for p in exclude]
+    parts = [_git(worktree, "diff", "--binary", "--", ".", *excl).stdout]
+    untracked = _git(worktree, "ls-files", "--others", "--exclude-standard", "-z", "--", ".", *excl).stdout
+    for rel in filter(None, untracked.split("\0")):
+        parts.append(_git(worktree, "diff", "--binary", "--no-index", "--", "/dev/null", rel, check=False).stdout)
+    return "".join(parts)
+
+
 _PATCH_FILE = re.compile(r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE)
 
 

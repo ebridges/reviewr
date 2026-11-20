@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { CheckRun, WorkItem } from "../api";
+import { useAIName } from "../lib";
+import { failedLabel } from "./ProposedFix";
 
 const STATUS: Record<CheckRun["status"], { label: string; cls: string; mark: string }> = {
   passed: { label: "Passed", cls: "ok", mark: "✓" },
@@ -11,9 +13,10 @@ const STATUS: Record<CheckRun["status"], { label: string; cls: string; mark: str
 /** Lint and test results for a work item's changed files. */
 export function ChecksPanel({
   item, onRun, running, onFixFailures,
-}: { item: WorkItem; onRun: () => void; running: boolean; onFixFailures?: (summary: string) => void }) {
+}: { item: WorkItem; onRun: () => void; running: boolean; onFixFailures?: (summary: string, label: string) => void }) {
   const report = item.check_report;
   const busy = running || item.checks_running;
+  const ai = useAIName();
   const failures = report?.runs.filter((r) => r.status === "failed" || r.status === "error") ?? [];
 
   return (
@@ -40,8 +43,9 @@ export function ChecksPanel({
           {failures.length > 0 && onFixFailures && (
             <button className="btn sm" disabled={busy} onClick={() => onFixFailures(
               failures.map((f) => `${f.name} ${f.status === "error" ? "couldn't run" : "failed"}:\n${f.output.slice(-1500)}`).join("\n\n"),
+              failedLabel(failures.map((f) => f.name)),
             )}>
-              Ask the agent to fix these
+              Ask {ai} to fix {failures.length === 1 ? "it" : "these"}
             </button>
           )}
         </>
