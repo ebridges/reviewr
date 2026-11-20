@@ -42,16 +42,18 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(SCHEMA)
-        # One lock for all writes; background agent jobs update state concurrently
-        # with API requests.
+        # One lock for every use of the connection, reads included: API requests and
+        # background jobs run on different threads, and sqlite3 connections aren't
+        # safe to use from two threads at once (it fails with InterfaceError).
         self._lock = threading.RLock()
 
     # Pull requests
 
     def get_pr(self, ref: PRRef) -> PullRequest | None:
-        row = self._db.execute(
-            "select json from pull_requests where pr_key = ?", (ref.key,)
-        ).fetchone()
+        with self._lock:
+            row = self._db.execute(
+                "select json from pull_requests where pr_key = ?", (ref.key,)
+            ).fetchone()
         if not row:
             return None
         try:
@@ -61,7 +63,9 @@ class Store:
 
     def list_prs(self) -> list[PullRequest]:
         out = []
-        for (js,) in self._db.execute("select json from pull_requests"):
+        with self._lock:
+            rows = self._db.execute("select json from pull_requests").fetchall()
+        for (js,) in rows:
             try:
                 out.append(PullRequest.model_validate_json(js))
             except ValidationError:
@@ -78,9 +82,10 @@ class Store:
     # Review state
 
     def get_state(self, ref: PRRef) -> ReviewState:
-        row = self._db.execute(
-            "select json from review_state where pr_key = ?", (ref.key,)
-        ).fetchone()
+        with self._lock:
+            row = self._db.execute(
+                "select json from review_state where pr_key = ?", (ref.key,)
+            ).fetchone()
         return ReviewState.model_validate_json(row[0]) if row else ReviewState()
 
     def update_state(self, ref: PRRef, change: Callable[[ReviewState], None]) -> ReviewState:
@@ -99,7 +104,8 @@ class Store:
     # LLM results
 
     def get_llm(self, key: str) -> Any | None:
-        row = self._db.execute("select json from llm_cache where cache_key = ?", (key,)).fetchone()
+        with self._lock:
+            row = self._db.execute("select json from llm_cache where cache_key = ?", (key,)).fetchone()
         return json.loads(row[0]) if row else None
 
     def put_llm(self, key: str, value: Any) -> None:
