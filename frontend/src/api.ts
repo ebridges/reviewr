@@ -75,6 +75,7 @@ export interface WorkItem {
   error: string | null;
   agent_log: string;
   instruction: string;
+  prompt: string | null;
   check_report: CheckReport | null;
   checks_running: boolean;
 }
@@ -286,7 +287,8 @@ export const api = {
   draftReplies: (r: PRRef, threadIds?: string[]) =>
     call<ReviewState>(`${base(r)}/replies/draft`, send("POST", { thread_ids: threadIds ?? null })),
   plan: (r: PRRef) => call<ReviewState>(`${base(r)}/plan`, send("POST")),
-  patchItem: (r: PRRef, id: number, patch: { mode?: string; title?: string; instruction?: string }) =>
+  itemPrompt: (r: PRRef, id: number) => call<{ prompt: string; default: string; edited: boolean }>(`${base(r)}/plan/${id}/prompt`),
+  patchItem: (r: PRRef, id: number, patch: { mode?: string; title?: string; instruction?: string; prompt?: string; reset_prompt?: boolean }) =>
     call<ReviewState>(`${base(r)}/plan/${id}`, send("PATCH", patch)),
   draftAll: (r: PRRef) => call<ReviewState>(`${base(r)}/plan/draft-all`, send("POST")),
   draft: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/draft`, send("POST")),

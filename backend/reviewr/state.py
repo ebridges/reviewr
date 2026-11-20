@@ -74,6 +74,7 @@ class WorkItem(BaseModel):
     error: str | None = None
     agent_log: str = ""
     instruction: str = ""
+    prompt: str | None = None  # your edited agent prompt; None means the generated default
     check_report: CheckReport | None = None
     checks_running: bool = False
 

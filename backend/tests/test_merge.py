@@ -184,3 +184,41 @@ def test_check_skips_when_too_many_tests(tmp_path):
                         discover=["printf", "\\n".join(listing)])
     run = _one(check, tmp_path, tmp_path, RepoConfig(path=tmp_path), [ChangedPath(path="a.js")])
     assert run.status == "skipped" and "limit of 3" in run.reason and len(run.tests) == 5
+
+
+def test_agent_prompt_is_readable_and_editable(setup):
+    """The Fix page shows this prompt; an edited one replaces it when drafting."""
+    from reviewr.agent import agent_prompt, prompt_for
+    from reviewr.models import Comment, Thread
+    from reviewr.state import ReviewState, ThreadDecision, WorkItem
+
+    _cfg, pr, _clone = setup
+    body = ('**![P1 Badge](https://img.shields.io/x) Keep the margins** <sub>bot</sub>\n\nUse the base margin.'
+            "\n\n<!-- hidden -->\nUseful? React with 👍 / 👎.")
+    t = Thread(id="T", path="app.py", line=4, original_line=4, start_line=None, is_resolved=False, is_outdated=False,
+               original_commit=None, diff_hunk="@@ -1,2 +1,3 @@\n def greet(name):\n+    x = 1",
+               comments=[Comment(id="c", author="rev", body=body, created_at=datetime.now(UTC), url="u")])
+    pr = pr.model_copy(update={"threads": [t]})
+    state = ReviewState(decisions={"T": ThreadDecision(decision="fix", note="only in app.py", decided_at=datetime.now(UTC))})
+    item = WorkItem(id=1, title="Keep margins", thread_ids=["T"])
+    text = agent_prompt(pr, state, item)
+    assert "**P1 Keep the margins**" in text and "<sub>" not in text and "img.shields" not in text
+    assert "Useful?" not in text and "hidden" not in text
+    assert "+    x = 1" in text and "only in app.py" in text
+    assert prompt_for(pr, state, item) == text
+    item.prompt = "my own prompt"
+    assert prompt_for(pr, state, item) == "my own prompt"
+
+
+def test_interrupted_draft_is_marked_failed(setup, tmp_path):
+    """A draft left "drafting" by a restart doesn't wait forever."""
+    from reviewr import fixwork
+    from reviewr.state import WorkItem
+    from reviewr.store import Store
+
+    _cfg, pr, _clone = setup
+    st = Store(tmp_path / "s.sqlite3")
+    st.update_state(pr.ref, lambda s: s.plan.append(WorkItem(id=1, title="x", thread_ids=[], status="drafting", prompt="mine")))
+    fixwork.recover_interrupted(st, pr)
+    item = st.get_state(pr.ref).item(1)
+    assert item.status == "failed" and "restarted" in item.error and item.prompt == "mine"

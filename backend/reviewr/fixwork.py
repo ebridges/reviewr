@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from reviewr import envs, git
-from reviewr.agent import agent_prompt, run_agent
+from reviewr.agent import prompt_for, run_agent
 from reviewr.checks import CheckReport, CheckRun, run_checks
 from reviewr.config import Config
 from reviewr.llm.check import check_patch
@@ -33,6 +33,41 @@ log = logging.getLogger(__name__)
 
 # Two jobs at a time keeps API usage, CPU (tests) and disk churn reasonable.
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="fixwork")
+_running: set[tuple[str, int]] = set()  # (PR key, item id) with a job in this process
+
+
+def _submit(pr: PullRequest, item_id: int, fn, *args) -> None:
+    """Run a job for a work item in the background, remembering that it's running here."""
+    key = (pr.ref.key, item_id)
+    _running.add(key)
+
+    def run() -> None:
+        try:
+            fn(*args)
+        finally:
+            _running.discard(key)
+
+    _executor.submit(run)
+
+
+def recover_interrupted(store: Store, pr: PullRequest) -> None:
+    """Drafts and checks whose job isn't running in this process were cut
+    off by a restart. Mark them so they can be started again instead of waiting forever."""
+    state = store.get_state(pr.ref)
+    stuck = [w.id for w in state.plan if (pr.ref.key, w.id) not in _running and (
+        w.status == "drafting" or w.checks_running)]
+    if not stuck:
+        return
+
+    def mark(s: ReviewState) -> None:
+        for w in s.plan:
+            if w.id not in stuck or (pr.ref.key, w.id) in _running:
+                continue
+            if w.status == "drafting":
+                w.status, w.error = "failed", "Interrupted because reviewr restarted. Draft it again."
+            w.checks_running = False
+
+    store.update_state(pr.ref, mark)
 
 
 def _root(cfg: Config, pr: PullRequest) -> Path:
@@ -101,7 +136,7 @@ def start_draft(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> Non
         item.check_report, item.checks_running = None, False
 
     store.update_state(pr.ref, mark)
-    _executor.submit(_draft_job, store, cfg, pr, item_id, work)
+    _submit(pr, item_id, _draft_job, store, cfg, pr, item_id, work)
 
 
 def _draft_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: Path) -> None:
@@ -111,7 +146,7 @@ def _draft_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: P
         state = store.get_state(pr.ref)
         item = state.item(item_id)
         git.create_draft_worktree(repo_cfg.path, draft, git.head_sha(work))
-        agent_log = run_agent(draft, agent_prompt(pr, state, item), cfg.llm.model)
+        agent_log = run_agent(draft, prompt_for(pr, state, item), cfg.llm.model)
         patch = git.working_diff(draft, exclude=envs.provided_paths(repo_cfg))
         thread_checks = check_patch(pr, item.thread_ids, patch, cfg.llm)
 
@@ -174,7 +209,7 @@ def start_checks(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> No
         raise ValueError(f'No checks are configured for {pr.ref.slug}. Add [[repos."{pr.ref.slug}".checks]] to reviewr.toml.')
     work = work_worktree(cfg, pr)
     store.update_state(pr.ref, lambda s: setattr(s.item(item_id), "checks_running", True))
-    _executor.submit(_checks_job, store, cfg, pr, item_id, work)
+    _submit(pr, item_id, _checks_job, store, cfg, pr, item_id, work)
 
 
 def _checks_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: Path) -> None:

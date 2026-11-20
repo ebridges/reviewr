@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from reviewr import ai, cleanup, envs, fixwork, git, jira, merge, submit
+from reviewr.agent import agent_prompt
 from reviewr.config import DOTENV_KEYS, load_config, load_dotenv
 from reviewr.editor import EditorError, open_in_editor
 from reviewr.github import GitHubClient, GitHubError, fetch_pull_request
@@ -134,7 +135,9 @@ def post_status(owner: str, repo: str, number: int, req: StatusRequest) -> dict:
 @app.get(PR)
 def get_pr(owner: str, repo: str, number: int, refresh: bool = False) -> PRView:
     ref = _ref(owner, repo, number)
-    return PRView(pr=_load_pr(ref, refresh), state=store().get_state(ref))
+    pr = _load_pr(ref, refresh)
+    fixwork.recover_interrupted(store(), pr)
+    return PRView(pr=pr, state=store().get_state(ref))
 
 
 # Overview and Triage
@@ -264,6 +267,8 @@ class ItemPatch(BaseModel):
     mode: str | None = None
     title: str | None = None
     instruction: str | None = None
+    prompt: str | None = None  # your edited agent prompt
+    reset_prompt: bool = False  # go back to the generated prompt
 
 
 @app.patch(PR + "/plan/{item_id}")
@@ -276,8 +281,22 @@ def patch_item(owner: str, repo: str, number: int, item_id: int, req: ItemPatch)
             item.title = req.title
         if req.instruction is not None:
             item.instruction = req.instruction
+        if req.reset_prompt:
+            item.prompt = None
+        elif req.prompt is not None:
+            item.prompt = req.prompt if req.prompt.strip() else None
 
     return store().update_state(_ref(owner, repo, number), save)
+
+
+@app.get(PR + "/plan/{item_id}/prompt")
+def get_item_prompt(owner: str, repo: str, number: int, item_id: int) -> dict:
+    """The prompt the agent will get for this item, and the generated default."""
+    ref = _ref(owner, repo, number)
+    pr, state = _load_pr(ref), store().get_state(ref)
+    item = state.item(item_id)
+    default = agent_prompt(pr, state, item)
+    return {"prompt": item.prompt or default, "default": default, "edited": item.prompt is not None}
 
 
 @app.post(PR + "/plan/draft-all")

@@ -8,6 +8,7 @@ worktree and has no network access; unlike the Claude setup it can run commands 
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,7 +29,33 @@ class AgentError(RuntimeError):
     pass
 
 
+_TAG = re.compile(r"<[^>]+>")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_IMG = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+# Footers review bots add to every comment; they say nothing about the code.
+_BOILERPLATE = re.compile(r"^\s*Useful\? React with .*$", re.MULTILINE)
+
+
+def _readable(body: str) -> str:
+    """A review comment without HTML, image badges (kept as their label, e.g. "P2"), or
+    bot footers, which only make the prompt harder to read."""
+    text = _HTML_COMMENT.sub("", body)
+    text = _IMG.sub(lambda m: re.sub(r"\s*badge$", "", m.group(1), flags=re.IGNORECASE), text)
+    text = _TAG.sub("", text)
+    text = _BOILERPLATE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _code(diff_hunk: str, lines: int = 20) -> str:
+    """The end of the diff hunk GitHub shows with the comment: the code it's attached to."""
+    rows = diff_hunk.strip().splitlines()
+    return "\n".join(rows[-lines:])
+
+
 def agent_prompt(pr: PullRequest, state: ReviewState, item: WorkItem) -> str:
+    """The prompt for drafting a work item. Shown on the Fix page, where you can edit it;
+    an edited prompt is stored on the item and used instead."""
     parts = [
         (
             f'You are making changes to address code review comments on the pull request "{pr.title}". '
@@ -38,23 +65,32 @@ def agent_prompt(pr: PullRequest, state: ReviewState, item: WorkItem) -> str:
         f"Work item: {item.title}",
         "",
         (
-            "Make the smallest change that does what each reviewer asked. Don't change unrelated "
-            "code, don't reformat files, and don't commit. When you're done, reply with one short "
-            "paragraph saying what you changed."
+            "Make the smallest change that does what each reviewer asked. Don't change unrelated code, "
+            "don't reformat files, and don't commit. When you're done, reply with one short paragraph "
+            "saying what you changed."
         ),
-        "",
     ]
-    for tid in item.thread_ids:
+    for n, tid in enumerate(item.thread_ids, 1):
         t = pr.thread(tid)
         d = state.decisions.get(tid)
-        convo = "\n".join(f"  {c.author}: {c.body.strip()}" for c in t.comments)
-        parts.append(f"Comment on {t.path} line {t.line or t.original_line}:\n{convo}")
-        if d and d.note:
-            parts.append(f"  Author's note: {d.note}")
+        parts += ["", f"## Comment {n}: {t.path}, line {t.line or t.original_line}"]
+        if t.diff_hunk:
+            parts += ["", "The code it's attached to (the last line is the one commented on):", "```diff", _code(t.diff_hunk), "```"]
         parts.append("")
+        for c in t.comments:
+            parts.append(f"{c.author}:")
+            parts.append(_readable(c.body))
+            parts.append("")
+        if d and d.note:
+            parts.append(f"The author's note on this comment: {d.note}")
     if item.instruction:
-        parts.append(f"Additional instruction from the author: {item.instruction}")
-    return "\n".join(parts)
+        parts += ["", f"Additional instruction from the author: {item.instruction}"]
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def prompt_for(pr: PullRequest, state: ReviewState, item: WorkItem) -> str:
+    """The prompt a draft uses: yours if you edited it, otherwise the default."""
+    return item.prompt or agent_prompt(pr, state, item)
 
 
 async def _run(worktree: Path, prompt: str, model: str) -> str:
