@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PRContext } from "../App";
 import {
-  api, type Conflict, type ConflictCategory, type ConflictOption, type MergeSession, type MergeView, type PRRef,
+  api, type Conflict, type RemoteStatus, type ConflictCategory, type ConflictOption, type MergeSession, type MergeView, type PRRef,
 } from "../api";
 import { CheckRow } from "../components/ChecksPanel";
 import { DiffView } from "../components/Code";
+import { Inline } from "../components/Inline";
+import { KeyHelp } from "../components/KeyHelp";
+import { ProposedFix, failedLabel, forWhat } from "../components/ProposedFix";
 import { LineDiffView, diffStats, lineDiff, plainLines, type DLine } from "../components/LineDiff";
 import { prHref, useAIName } from "../lib";
 
@@ -75,7 +78,7 @@ export function Merge({ ctx, arg }: { ctx: PRContext; arg?: string }) {
     queryFn: () => api.merge(pr.ref),
     refetchInterval: (query) => {
       const s = query.state.data?.session;
-      return s && (s.status === "analyzing" || s.checks_running) ? 2000 : false;
+      return s && (s.status === "analyzing" || s.checks_running || s.fix?.status === "running") ? 2000 : false;
     },
   });
   const [sub, id] = (arg ?? "").split("/");
@@ -90,7 +93,6 @@ export function Merge({ ctx, arg }: { ctx: PRContext; arg?: string }) {
   const page = sub === "resolve" || sub === "finish" ? sub : "triage";
   return (
     <div className="merge-wrap">
-      <MergeSteps prRef={pr.ref} s={s} page={page} />
       {page === "triage" && <ConflictTriage prRef={pr.ref} view={view} />}
       {page === "resolve" && <Resolve prRef={pr.ref} view={view} id={id ? decodeURIComponent(id) : undefined} />}
       {page === "finish" && <Finish prRef={pr.ref} view={view} />}
@@ -104,34 +106,41 @@ function useSetView(ref: PRRef) {
   return (v: MergeView) => qc.setQueryData(key, v);
 }
 
-/** Sub-steps of the update, with progress counts. */
-function MergeSteps({ prRef, s, page }: { prRef: PRRef; s: MergeSession; page: string }) {
+export interface WorkflowStep { key: string; label: string; href?: string; on: boolean }
+
+/** The steps of an update from main, for the header's tracker. Steps you can't reach yet
+ *  have no link. */
+export function mergeSteps(prRef: PRRef, s: MergeSession | null, arg?: string): WorkflowStep[] {
+  const sub = (arg ?? "").split("/")[0];
+  if (!s) {
+    return [
+      { key: "start", label: "Start", href: prHref(prRef, "merge"), on: true },
+      { key: "triage", label: "Triage", on: false },
+      { key: "resolve", label: "Resolve", on: false },
+      { key: "finish", label: "Finish", on: false },
+    ];
+  }
   const all = Object.values(s.conflicts);
   const triaged = all.filter((c) => c.category).length;
   const resolved = all.filter((c) => c.resolved).length;
+  if (s.status === "committed") {
+    return [
+      { key: "triage", label: `Triage · ${triaged}/${all.length}`, on: false },
+      { key: "resolve", label: `Resolve · ${resolved}/${all.length}`, on: false },
+      { key: "finish", label: "Finish", on: false },
+      { key: "done", label: "Done", href: prHref(prRef, "merge"), on: true },
+    ];
+  }
+  const page = sub === "resolve" || sub === "finish" ? sub : "triage";
   const firstOpen = ordered(s).find((c) => !c.resolved);
-  const steps = [
-    { key: "triage", label: "Triage", count: `${triaged}/${all.length}`, href: prHref(prRef, "merge", "triage") },
-    { key: "resolve", label: "Resolve", count: `${resolved}/${all.length}`, href: prHref(prRef, "merge", `resolve${firstOpen ? `/${encodeURIComponent(firstOpen.id)}` : ""}`) },
-    { key: "finish", label: "Finish", count: "", href: prHref(prRef, "merge", "finish") },
+  return [
+    { key: "triage", label: `Triage · ${triaged}/${all.length}`, href: prHref(prRef, "merge", "triage"), on: page === "triage" },
+    {
+      key: "resolve", label: `Resolve · ${resolved}/${all.length}`, on: page === "resolve",
+      href: prHref(prRef, "merge", `resolve${firstOpen ? `/${encodeURIComponent(firstOpen.id)}` : ""}`),
+    },
+    { key: "finish", label: "Finish", href: prHref(prRef, "merge", "finish"), on: page === "finish" },
   ];
-  return (
-    <div className="merge-steps">
-      <span className="strong small">Update from {s.base_ref}</span>
-      <nav className="steps" aria-label="Update steps">
-        {steps.map((st, i) => (
-          <Fragment key={st.key}>
-            {i > 0 && <span className="step-sep" aria-hidden="true">→</span>}
-            <a href={st.href} className={`step ${page === st.key ? "on" : ""}`} aria-current={page === st.key ? "step" : undefined}>
-              {st.label}{st.count && ` · ${st.count}`}
-            </a>
-          </Fragment>
-        ))}
-      </nav>
-      <span className="grow" />
-      <DiscardButton prRef={prRef} />
-    </div>
-  );
 }
 
 function DiscardButton({ prRef }: { prRef: PRRef }) {
@@ -146,6 +155,62 @@ function DiscardButton({ prRef }: { prRef: PRRef }) {
   );
 }
 
+/** Commits on GitHub's copy of the branch that your checkout doesn't have (for example
+ *  from GitHub's "Update branch" button). They have to be brought in before pushing. */
+export function GitHubCommits({ prRef, branch, r, onSynced, action = "Bring them in" }: {
+  prRef: PRRef; branch: string; r: RemoteStatus; onSynced: () => void; action?: string;
+}) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const sync = useMutation({
+    mutationFn: () => api.mergeRemoteSync(prRef),
+    onSuccess: (st) => {
+      qc.setQueryData(["mergeRemote", prRef.number], st);
+      qc.invalidateQueries({ queryKey: ["work", prRef.number] });
+      qc.invalidateQueries({ queryKey: ["mergePreview", prRef.owner, prRef.repo, prRef.number] });
+      setConfirming(false);
+      onSynced();
+    },
+  });
+  const how = r.ahead === 0
+    ? `Your checkout of ${branch} is moved forward to GitHub's (a fast-forward).`
+    : `GitHub's ${branch} is merged into yours with a merge commit; the files only change where GitHub's commits differ.`;
+  return (
+    <div className="banner warn stack-gap">
+      <div className="small">
+        <strong>GitHub has {plural(r.behind, "commit")} on {branch} that your checkout doesn't.</strong> Someone may have used
+        GitHub's "Update branch" button, or pushed from another machine. Until they're in your branch, pushing it is rejected.
+      </div>
+      <ul className="commits">
+        {r.commits.map((c) => <li key={c.sha}><span className="mono">{c.sha}</span> {c.subject} <span className="muted">· {c.author}</span></li>)}
+      </ul>
+      {r.fetch_error && (
+        <p className="small">
+          GitHub couldn't be reached just now, so this is from the last time reviewr fetched the branch. Bringing these commits in
+          works without GitHub; pushing needs it. <span className="muted">({r.fetch_error})</span>
+        </p>
+      )}
+      {r.conflicted_files.length > 0 ? (
+        <p className="small">
+          They conflict with your branch in {r.conflicted_files.join(", ")}, so reviewr won't merge them. Run{" "}
+          <span className="mono">git pull</span> in your checkout and resolve those files.
+        </p>
+      ) : !confirming ? (
+        <div className="row-wrap"><button className="btn sm primary" onClick={() => setConfirming(true)}>{action}…</button></div>
+      ) : (
+        <div className="row-wrap">
+          <span className="small grow">{how} Your uncommitted edits stay; git stops if they'd be overwritten.</span>
+          <button className="btn sm primary" onClick={() => sync.mutate()} disabled={sync.isPending}>
+            {sync.isPending ? "Checking GitHub and merging…" : "Yes, go ahead"}
+          </button>
+          <button className="btn sm" onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      )}
+      {sync.error && <pre className="code error-box"><div>{(sync.error as Error).message}</div></pre>}
+    </div>
+  );
+}
+
 // Start
 
 function MergeStart({ prRef, branch }: { prRef: PRRef; branch: string }) {
@@ -153,6 +218,8 @@ function MergeStart({ prRef, branch }: { prRef: PRRef; branch: string }) {
   const setView = useSetView(prRef);
   const preview = useQuery({ queryKey: ["mergePreview", prRef.owner, prRef.repo, prRef.number], queryFn: () => api.mergePreview(prRef) });
   const start = useMutation({ mutationFn: () => api.mergeStart(prRef), onSuccess: setView });
+  const remote = useQuery({ queryKey: ["mergeRemote", prRef.number], queryFn: () => api.mergeRemote(prRef) });
+  const behindGitHub = (remote.data?.behind ?? 0) > 0;
   const p = preview.data;
   return (
     <main className="page narrow">
@@ -161,6 +228,9 @@ function MergeStart({ prRef, branch }: { prRef: PRRef; branch: string }) {
       </div>
       {preview.error && <div className="banner error">{(preview.error as Error).message}</div>}
       {!p && !preview.error && <p className="muted">Fetching {branch} and main…</p>}
+      {remote.data && behindGitHub && (
+        <GitHubCommits prRef={prRef} branch={branch} r={remote.data} action="Bring them in first" onSynced={() => preview.refetch()} />
+      )}
       {p?.fetch_error && <div className="banner warn">Couldn't fetch from GitHub, so this uses the last fetched copy: {p.fetch_error}</div>}
       {p && p.behind === 0 && (
         <section className="card"><p>This branch already has everything on {p.base_ref}. Nothing to update.</p></section>
@@ -186,7 +256,7 @@ function MergeStart({ prRef, branch }: { prRef: PRRef; branch: string }) {
               </ul>
             </details>
             <div className="row-wrap">
-              <button className="btn primary" onClick={() => start.mutate()} disabled={start.isPending}>
+              <button className="btn primary" onClick={() => start.mutate()} disabled={start.isPending || behindGitHub || !remote.data}>
                 {start.isPending ? "Merging…" : `Start update`}
               </button>
               {start.error && <span className="error small">{(start.error as Error).message}</span>}
@@ -226,11 +296,14 @@ function ConflictTriage({ prRef, view }: { prRef: PRRef; view: MergeView }) {
   return (
     <main className="page">
       <section className="card stack-gap">
+        <div className="row-between">
         <p>
           Merging {plural(s.commit_count, "commit")} from <span className="mono">{s.base_ref}</span> into{" "}
           <span className="mono">{s.head_ref}</span>. {plural(s.clean_files.length, "file")} merged without conflicts;{" "}
           {all.length === 0 ? "nothing conflicts." : `${plural(all.length, "conflict")} in ${plural(s.files.length, "file")}.`}
         </p>
+        <DiscardButton prRef={prRef} />
+        </div>
         {s.status === "analyzing" && <div className="banner">{ai} is triaging {plural(all.filter((c) => !c.category).length, "conflict")}… The rest are ready below.</div>}
         {s.error && (
           <div className="banner error row-wrap">
@@ -303,7 +376,7 @@ function TriageRow({ prRef, c, base, ai }: { prRef: PRRef; c: Conflict; base: st
       </div>
       {preview && shown && (
         <div className="reply-inline">
-          <p className="muted tiny">{c.reason}</p>
+          <p className="muted tiny"><Inline text={c.reason} /></p>
           <div className="label">After the merge, compared with this PR</div>
           <LineDiffView lines={withContext(c, lineDiff(c.ours, resultText(c, shown)))} />
         </div>
@@ -430,6 +503,11 @@ function ConflictCard({ prRef, s, c, options, onNav, onDone }: {
           <span className="grow" />
           <button className="btn sm" onClick={() => onNav(-1)} title="Previous (k)">←</button>
           <button className="btn sm" onClick={() => onNav(1)} title="Next (j)">→</button>
+          <KeyHelp>
+            <div><span className="kbd">1</span>–<span className="kbd">{options.length}</span> choose an option</div>
+            <div><span className="kbd">↵</span> accept and go to the next</div>
+            <div><span className="kbd">j</span> / <span className="kbd">k</span> next / previous</div>
+          </KeyHelp>
         </div>
         <h1 className="h-thread">{c.title || `Conflict in ${c.path}`}</h1>
 
@@ -438,7 +516,7 @@ function ConflictCard({ prRef, s, c, options, onNav, onDone }: {
             <strong className="small">
               {c.source === "rule" ? "Rule" : ai} suggests{c.recommended ? `: ${optionLabel(c.recommended, c, base, ai)}` : ""}
             </strong>
-            <p className="small">{c.reason}</p>
+            <p className="small"><Inline text={c.reason} /></p>
           </div>
         )}
 
@@ -526,16 +604,6 @@ function ConflictCard({ prRef, s, c, options, onNav, onDone }: {
           {save.error && <span className="error small">{(save.error as Error).message}</span>}
         </div>
       </article>
-      <aside className="stack-gap">
-        <div className="card">
-          <div className="label">Keys</div>
-          <div className="muted small keys">
-            <div><span className="kbd">1</span>–<span className="kbd">{options.length}</span> choose an option</div>
-            <div><span className="kbd">↵</span> accept and go to the next</div>
-            <div><span className="kbd">j</span> / <span className="kbd">k</span> next / previous</div>
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }
@@ -582,7 +650,18 @@ function Finish({ prRef, view }: { prRef: PRRef; view: MergeView }) {
     },
   });
   const report = s.check_report;
-  const busy = s.checks_running || checks.isPending;
+  const fixing = s.fix?.status === "running";
+  const busy = s.checks_running || checks.isPending || fixing;
+  const failed = report?.runs.filter((r) => r.status === "failed" || r.status === "error") ?? [];
+  const failureText = failed
+    .map((r) => `${r.name} ${r.status === "error" ? "couldn't run" : "failed"}${r.command ? ` (${r.command})` : ""}:\n${r.output.slice(-3000)}`)
+    .join("\n\n");
+  const pendingFix = s.fix && (s.fix.status === "running" || s.fix.status === "ready");
+  const ai = useAIName();
+  const askFix = useMutation({
+    mutationFn: ({ failure, label }: { failure: string; label: string }) => api.mergeFix(prRef, failure, label),
+    onSuccess: setView,
+  });
 
   return (
     <main className="page">
@@ -629,27 +708,82 @@ function Finish({ prRef, view }: { prRef: PRRef; view: MergeView }) {
         )}
         {checks.error && <p className="error small">{(checks.error as Error).message}</p>}
         {report?.runs.map((r) => <CheckRow key={r.name} run={r} />)}
+        {failed.length > 0 && !pendingFix && (
+          <div className="info-bar">
+            <span className="grow small">
+              {plural(failed.length, "check")} failed. {ai} can read the output and propose a change to the merged code; you'll see
+              the diff before anything is applied.
+            </span>
+            <button className="btn sm primary" onClick={() => askFix.mutate({ failure: failureText, label: failedLabel(failed.map((r) => r.name)) })} disabled={askFix.isPending || busy}>
+              Ask {ai} to fix {failed.length === 1 ? "it" : "them"}
+            </button>
+          </div>
+        )}
+        {askFix.error && <p className="error small">{(askFix.error as Error).message}</p>}
       </section>
+
+      {s.fix && s.fix.status !== "applied" && <FixCard prRef={prRef} s={s} />}
+      {s.fix?.status === "applied" && (
+        <p className="small">
+          <span className="pill ok">Fix{forWhat(s.fix) ? ` for ${forWhat(s.fix)}` : ""} applied</span> {s.fix.ai_name}'s change is part of the
+          merge. Run the checks again to confirm it.
+        </p>
+      )}
 
       <section className="card stack-gap">
         <h2>Commit the merge</h2>
         <p className="muted small">
           Creates the merge commit and moves your checkout of <span className="mono">{s.head_ref}</span> to it. Your uncommitted
           edits stay as they are; if any of them are in files the merge changes, nothing is moved and you'll be told which. Nothing is
-          pushed yet.
+          pushed yet. Your repository's commit hooks run as they would in your checkout; if they only reformat files, the
+          formatting is kept and the commit goes ahead.
         </p>
         <input className="input" value={message} onChange={(e) => setMessage(e.target.value)} aria-label="Commit message" />
         <div className="row-wrap">
-          <button className="btn primary" onClick={() => commit.mutate()} disabled={commit.isPending || open.length > 0 || busy}>
-            {commit.isPending ? "Committing…" : `Commit merge to ${s.head_ref}`}
+          <button className="btn primary" onClick={() => commit.mutate()} disabled={commit.isPending || open.length > 0 || busy || !!pendingFix}>
+            {commit.isPending ? "Committing and running your commit hooks…" : `Commit merge to ${s.head_ref}`}
           </button>
           {report && report.runs.some((r) => r.status === "failed" || r.status === "error") && (
             <span className="error small">Some checks failed. You can still commit and fix them afterwards.</span>
           )}
         </div>
-        {commit.error && <pre className="code error-box"><div>{(commit.error as Error).message}</div></pre>}
+        {pendingFix && <span className="muted small">Apply or discard the proposed fix before committing.</span>}
+        <div className="row-wrap"><span className="grow" /><DiscardButton prRef={prRef} /></div>
+        {commit.error && (
+          <>
+            <pre className="code error-box"><div>{(commit.error as Error).message}</div></pre>
+            {/hooks failed/.test((commit.error as Error).message) && !pendingFix && (
+              <div className="row-wrap">
+                <button className="btn sm primary" onClick={() => { askFix.mutate({ failure: (commit.error as Error).message, label: "commit hooks" }); commit.reset(); }}
+                  disabled={askFix.isPending || busy}>
+                  Ask {ai} to fix this
+                </button>
+                <span className="muted small">You'll see the proposed change before it's applied.</span>
+              </div>
+            )}
+          </>
+        )}
       </section>
     </main>
+  );
+}
+
+/** The agent's proposed change for failing checks or hooks: its explanation, the diff,
+ *  and Apply / Discard. */
+function FixCard({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
+  const setView = useSetView(prRef);
+  const fix = s.fix!;
+  const apply = useMutation({ mutationFn: () => api.mergeFixApply(prRef), onSuccess: setView });
+  const discard = useMutation({ mutationFn: () => api.mergeFixDiscard(prRef), onSuccess: setView });
+  const retry = useMutation({ mutationFn: () => api.mergeFixDiscard(prRef).then(() => api.mergeFix(prRef, fix.failure, fix.label)), onSuccess: setView });
+  return (
+    <ProposedFix
+      fix={fix} where="the merged code" onWhat="on top of your resolutions" applyLabel="Apply to the merge"
+      applyNote="Applying adds them to the merge; discarding puts the files back as you resolved them."
+      onApply={() => apply.mutate()} onDiscard={() => discard.mutate()} onRetry={() => retry.mutate()}
+      busy={apply.isPending || discard.isPending || retry.isPending}
+      error={(apply.error || discard.error || retry.error) as Error | null}
+    />
   );
 }
 
@@ -658,7 +792,10 @@ function FileDiff({ prRef, s, path }: { prRef: PRRef; s: MergeSession; path: str
   const f = s.files.find((x) => x.path === path)!;
   const ids = f.conflict_ids;
   const done = ids.filter((id) => s.conflicts[id].resolved).length;
-  const stamp = useMemo(() => ids.map((id) => `${s.conflicts[id].choice}:${s.conflicts[id].custom?.length ?? 0}`).join(","), [ids, s]);
+  const stamp = useMemo(
+    () => ids.map((id) => `${s.conflicts[id].choice}:${s.conflicts[id].custom?.length ?? 0}`).join(",") + `|${s.fix?.status}:${s.fixed_paths.join(",")}`,
+    [ids, s],
+  );
   const diff = useQuery({
     queryKey: ["mergeDiff", prRef.number, path, stamp],
     queryFn: () => api.mergeDiff(prRef, path),
@@ -691,6 +828,11 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
     mutationFn: () => api.mergePush(prRef),
     onSuccess: (v) => { setView(v); setConfirming(false); qc.invalidateQueries({ queryKey: ["work", prRef.number] }); },
   });
+  // A rejected push usually means GitHub has commits on the branch you don't (e.g. "Update branch").
+  const rejected = !!push.error && /non-fast-forward|\[rejected\]|fetch first/.test((push.error as Error).message);
+  const remote = useQuery({ queryKey: ["mergeRemote", prRef.number], queryFn: () => api.mergeRemote(prRef), enabled: !s.pushed });
+  useEffect(() => { if (rejected) remote.refetch(); }, [rejected]); // eslint-disable-line react-hooks/exhaustive-deps
+  const behindGitHub = (remote.data?.behind ?? 0) > 0;
   const again = useMutation({ mutationFn: () => api.mergeDiscard(prRef), onSuccess: setView });
   return (
     <main className="page narrow">
@@ -700,6 +842,13 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
           Commit <span className="mono">{s.commit_sha?.slice(0, 10)}</span> is on your checkout of {s.head_ref}, with{" "}
           {plural(Object.keys(s.conflicts).length, "conflict")} resolved and {plural(s.commit_count, "commit")} from {s.base_ref}.
         </p>
+        {s.hook_fixes.length > 0 && (
+          <div className="small">
+            Your repository's commit hooks reformatted {plural(s.hook_fixes.length, "file")}, and those changes are part of the
+            merge commit:
+            <ul className="file-list">{s.hook_fixes.map((p) => <li key={p} className="mono">{p}</li>)}</ul>
+          </div>
+        )}
         {s.pushed ? (
           <p className="small"><span className="pill ok">Pushed</span> {s.head_ref} is on GitHub with the merge.</p>
         ) : (
@@ -707,7 +856,10 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
             <p className="muted small">
               It isn't on GitHub yet. Push it now, or leave it: Respond pushes the branch together with your replies.
             </p>
-            {!confirming ? (
+            {behindGitHub ? (
+              <GitHubCommits prRef={prRef} branch={s.head_ref} r={remote.data!} action="Bring them in, then push"
+                onSynced={() => { push.reset(); push.mutate(); }} />
+            ) : !confirming ? (
               <div className="row-wrap"><button className="btn" onClick={() => setConfirming(true)}>Push to GitHub…</button></div>
             ) : (
               <div className="info-bar">
@@ -716,7 +868,7 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
                 <button className="btn sm" onClick={() => setConfirming(false)}>Cancel</button>
               </div>
             )}
-            {push.error && <p className="error small">{(push.error as Error).message}</p>}
+            {push.error && !(rejected && behindGitHub) && <p className="error small">{(push.error as Error).message}</p>}
           </>
         )}
         <div className="row-wrap">
@@ -741,20 +893,19 @@ export function useBranchStatus(ref: PRRef) {
   return { session: merge.data?.session ?? null, preview: preview.data, error: preview.error as Error | null };
 }
 
-export function MergeBadge({ prRef }: { prRef: PRRef }) {
-  const { session, preview } = useBranchStatus(prRef);
+/** Short status for the workflow switch: "+355 · 9 conflicts", "3/15", or nothing. */
+export function mergeStatus(session: MergeSession | null, preview?: { behind: number; conflicted_files: string[] }) {
   if (session && session.status !== "committed") {
     const all = Object.values(session.conflicts);
-    const done = all.filter((c) => c.resolved).length;
-    return <a className="merge-badge on" href={prHref(prRef, "merge")}>Updating from {session.base_ref} · {done}/{all.length} resolved</a>;
+    return { text: `${all.filter((c) => c.resolved).length}/${all.length}`, warn: false, title: "Conflicts resolved" };
   }
   if (!preview || preview.behind === 0) return null;
   const n = preview.conflicted_files.length;
-  return (
-    <a className={`merge-badge ${n ? "warn" : ""}`} href={prHref(prRef, "merge")} title={`Update this branch from ${preview.base_ref}`}>
-      {preview.base_ref} +{preview.behind}{n ? ` · ${plural(n, "conflict")}` : ""}
-    </a>
-  );
+  return {
+    text: `+${preview.behind}${n ? ` · ${plural(n, "conflict")}` : ""}`,
+    warn: n > 0,
+    title: `${plural(preview.behind, "commit")} on main that this branch doesn't have`,
+  };
 }
 
 export function BranchStatusCard({ prRef }: { prRef: PRRef }) {

@@ -314,10 +314,6 @@ textarea.input { resize: vertical; }
 
 /* Update from main */
 .merge-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.merge-steps { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 8px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
-.merge-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--accent-soft-border); background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
-.merge-badge.warn { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn); }
-.merge-badge:hover { text-decoration: none; filter: brightness(0.97); }
 .page.narrow { max-width: 860px; }
 .pad-x { padding: 0 16px; margin: 8px 0; }
 .file-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
@@ -358,6 +354,16 @@ textarea.input { resize: vertical; }
 .card-top .key-help { margin-top: -4px; }
 .pre-wrap { white-space: pre-wrap; }
 .fix-card { border-color: var(--accent-soft-border); }
+
+/* Workflow tracker */
+.workflow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.workflow-switch a { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; font-size: 13px; color: var(--fg-muted); background: var(--surface); }
+.workflow-switch a:hover { text-decoration: none; color: var(--fg); }
+.workflow-switch a.on { background: var(--fg); color: var(--bg); }
+.workflow-switch a + a { border-left: 1px solid var(--border-strong); }
+.wf-chip { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.wf-chip.warn { background: var(--warn-bg); color: var(--warn); }
+.step.off { opacity: 0.5; cursor: default; }
 
 /* Fix: item navigator, long paths */
 .item-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

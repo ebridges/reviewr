@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import type { PRView } from "../api";
 import { prHref, type Route } from "../lib";
-import { MergeBadge } from "../pages/Merge";
+import { mergeStatus, mergeSteps, useBranchStatus, type WorkflowStep } from "../pages/Merge";
 import { AISwitch } from "./AISwitch";
 import { WorkspaceMenu } from "./WorkspacePanel";
 
@@ -34,22 +34,9 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
         </a>
       )}
       {pr && <WorkspaceMenu prRef={pr.ref} headRef={pr.head_ref} />}
-      {pr && <MergeBadge prRef={pr.ref} />}
       <span className="spacer" />
       <AISwitch />
-      {route.ref && (
-        <nav aria-label="Workflow steps" className="steps">
-          {STEPS.map((s, i) => (
-            <Fragment key={s.page}>
-              {i > 0 && <span className="step-sep" aria-hidden="true">→</span>}
-              <a href={prHref(route.ref!, s.page)} className={`step ${route.page === s.page ? "on" : ""}`}
-                aria-current={route.page === s.page ? "step" : undefined}>
-                {s.label}{counts[s.page] ?? ""}
-              </a>
-            </Fragment>
-          ))}
-        </nav>
-      )}
+      {route.ref && <WorkflowTracker route={route} counts={counts} base={pr?.base_ref ?? "main"} />}
       {!route.ref && (
         <a href="#/settings" className="icon-link" aria-label="Settings" title="Settings">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -59,5 +46,40 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
         </a>
       )}
     </header>
+  );
+}
+
+/** One tracker for whichever workflow you're in: the switch picks review comments or
+ *  updating from main, and the steps are that workflow's. */
+function WorkflowTracker({ route, counts, base }: { route: Route; counts: Record<string, string>; base: string }) {
+  const ref = route.ref!;
+  const inMerge = route.page === "merge";
+  const { session, preview } = useBranchStatus(ref);
+  const status = mergeStatus(session, preview);
+  const steps: WorkflowStep[] = inMerge
+    ? mergeSteps(ref, session, route.arg)
+    : STEPS.map((s) => ({ key: s.page, label: s.label + (counts[s.page] ?? ""), href: prHref(ref, s.page), on: route.page === s.page }));
+  return (
+    <div className="workflow">
+      <div className="seg workflow-switch" role="group" aria-label="Workflow">
+        <a href={prHref(ref, "overview")} className={inMerge ? "" : "on"} aria-current={inMerge ? undefined : "true"}>Review comments</a>
+        <a href={prHref(ref, "merge")} className={inMerge ? "on" : ""} aria-current={inMerge ? "true" : undefined}>
+          Update from {base}
+          {status && <span className={`wf-chip ${status.warn ? "warn" : ""}`} title={status.title}>{status.text}</span>}
+        </a>
+      </div>
+      <nav aria-label="Workflow steps" className="steps">
+        {steps.map((s, i) => (
+          <Fragment key={s.key}>
+            {i > 0 && <span className="step-sep" aria-hidden="true">→</span>}
+            {s.href ? (
+              <a href={s.href} className={`step ${s.on ? "on" : ""}`} aria-current={s.on ? "step" : undefined}>{s.label}</a>
+            ) : (
+              <span className="step off">{s.label}</span>
+            )}
+          </Fragment>
+        ))}
+      </nav>
+    </div>
   );
 }
