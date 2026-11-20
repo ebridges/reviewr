@@ -19,8 +19,10 @@ The flow mirrors review comments: preview, triage, resolve, finish.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -193,14 +195,32 @@ def update(cfg: Config, pr: PullRequest, change) -> MergeSession:
 
 # Preview
 
-def _fetch(repo: Path, base_ref: str) -> str | None:
-    """Fetch the base branch at most every few minutes. Returns an error message."""
-    key = (str(repo), base_ref)
-    if time.time() - _last_fetch.get(key, 0) < FETCH_INTERVAL_S:
+FETCH_TIMEOUT_S = 20
+FETCH_RETRY_S = 60
+_fetch_failed: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _fetch(repo: Path, ref: str, force: bool = False, max_age: float = FETCH_INTERVAL_S) -> str | None:
+    """Fetch a branch from origin unless it was fetched in the last `max_age` seconds
+    (`force`: always). Returns an error message instead of raising: callers carry on
+    with the last fetched copy. Gives up after FETCH_TIMEOUT_S, and after a failure
+    doesn't try again for FETCH_RETRY_S, so an unreachable GitHub doesn't stall every page."""
+    key = (str(repo), ref)
+    if not force and time.time() - _last_fetch.get(key, 0) < max_age:
         return None
-    proc = git._git(repo, "fetch", "--quiet", "origin", base_ref, check=False)
-    if proc.returncode != 0:
-        return proc.stderr.strip()
+    if (failed := _fetch_failed.get(key)) and time.time() - failed[0] < FETCH_RETRY_S:
+        return failed[1]
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), "fetch", "--quiet", "origin", ref], capture_output=True,
+                              text=True, errors="replace", timeout=FETCH_TIMEOUT_S, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                              check=False)
+        error = proc.stderr.strip() if proc.returncode != 0 else None
+    except subprocess.TimeoutExpired:
+        error = f"GitHub didn't answer within {FETCH_TIMEOUT_S} seconds."
+    if error:
+        _fetch_failed[key] = (time.time(), error)
+        return error
+    _fetch_failed.pop(key, None)
     _last_fetch[key] = time.time()
     return None
 
@@ -251,6 +271,66 @@ def preview(cfg: Config, pr: PullRequest, fetch: bool = True) -> dict:
     info["changed_files"] = len(git._git(repo, "diff", "--name-only", mb, base_sha).stdout.splitlines())
     info["commits"] = [c.model_dump() for c in _log(repo, f"{head}..{base_sha}", limit=20)]
     return info
+
+
+# Your branch on GitHub
+
+def remote_status(cfg: Config, pr: PullRequest, fetch: bool = True) -> dict:
+    """How your checkout of the PR branch compares with the branch on GitHub. Commits on
+    GitHub you don't have (e.g. from GitHub's "Update branch" button, or another machine)
+    make a later push fail, so they're brought in before updating from main."""
+    repo = cfg.repo_path(pr.ref.slug)
+    fetch_error = _fetch(repo, pr.head_ref, max_age=60) if fetch else None
+    remote = f"origin/{pr.head_ref}"
+    remote_sha = git._git(repo, "rev-parse", "--verify", "--quiet", remote, check=False).stdout.strip()
+    work = fixwork.existing_work_tree(cfg, pr)
+    if not remote_sha or work is None:
+        return {"ahead": 0, "behind": 0, "conflicted_files": [], "commits": [], "fetch_error": fetch_error}
+    head = git.head_sha(work)
+    behind = _count(repo, f"{head}..{remote_sha}")
+    info = {
+        "ahead": _count(repo, f"{remote_sha}..{head}"), "behind": behind, "fetch_error": fetch_error,
+        "conflicted_files": [], "commits": [c.model_dump() for c in _log(repo, f"{head}..{remote_sha}", limit=10)],
+    }
+    if behind and info["ahead"]:
+        proc = git._git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, remote_sha, check=False)
+        if proc.returncode == 1:
+            info["conflicted_files"] = [x for x in proc.stdout.splitlines()[1:] if x.strip()]
+    return info
+
+
+def sync_with_remote(cfg: Config, pr: PullRequest) -> dict:
+    """Bring GitHub's commits on the PR branch into your checkout: a fast-forward if you
+    have nothing of your own on top, otherwise a merge, which is refused if it would
+    conflict. Uncommitted edits are left alone; git refuses if they'd be overwritten."""
+    with _lock:
+        existing = load(cfg, pr)
+        if existing and existing.status not in ("committed",):
+            raise MergeError("Finish or discard the update from main first.")
+        # Merging doesn't need GitHub: if it can't be reached, the last fetched copy of
+        # the branch is used, and the result says so.
+        fetch_error = _fetch(cfg.repo_path(pr.ref.slug), pr.head_ref, force=True)
+        status = remote_status(cfg, pr, fetch=False)
+        status["fetch_error"] = fetch_error
+        if status["behind"] == 0:
+            return status
+        if status["conflicted_files"]:
+            raise MergeError(
+                f"GitHub's {pr.head_ref} and yours would conflict in: {', '.join(status['conflicted_files'])}. "
+                "Merge them in your checkout (git pull) and resolve those by hand."
+            )
+        work = fixwork.work_worktree(cfg, pr)
+        remote = f"origin/{pr.head_ref}"
+        if status["ahead"] == 0:
+            args = ["merge", "--ff-only", remote]
+        else:
+            args = ["merge", "--no-edit", "-m", f"Merge {pr.head_ref} from GitHub", remote]
+        proc = subprocess.run(["git", "-C", str(work), *args], capture_output=True, text=True, errors="replace",
+                              env=envs.process_env(cfg.repos[pr.ref.slug]), check=False)
+        if proc.returncode != 0:
+            git._git(work, "merge", "--abort", check=False)
+            raise MergeError(f"Bringing in GitHub's commits failed; your checkout is as it was.\n\n{(proc.stderr or proc.stdout).strip()[-3000:]}")
+        return {**remote_status(cfg, pr, fetch=False), "fetch_error": fetch_error}
 
 
 # Parsing conflicts
@@ -489,6 +569,11 @@ def start(cfg: Config, pr: PullRequest, analyze) -> MergeSession:
         if err := _fetch(repo, pr.base_ref):
             log.warning("fetch of %s failed: %s", pr.base_ref, err)
         work = fixwork.work_worktree(cfg, pr)
+        if (behind := remote_status(cfg, pr)["behind"]):
+            raise MergeError(
+                f"GitHub has {behind} commit{'s' if behind != 1 else ''} on {pr.head_ref} that your checkout doesn't. "
+                "Bring them in first, or the merge can't be pushed."
+            )
         head = git.head_sha(work)
         base_sha = git._git(repo, "rev-parse", "--verify", f"origin/{pr.base_ref}").stdout.strip()
         if _count(repo, f"{head}..{base_sha}") == 0:
@@ -759,7 +844,12 @@ def push(cfg: Config, pr: PullRequest) -> MergeSession:
     s = load(cfg, pr)
     if not s or s.status != "committed":
         raise MergeError("Commit the merge before pushing.")
-    git.push(fixwork.work_worktree(cfg, pr), pr.head_ref)
+    try:
+        git.push(fixwork.work_worktree(cfg, pr), pr.head_ref)
+    except git.GitError as e:
+        if re.search(r"timed out|Could not resolve|Could not read from remote|Connection refused", str(e)):
+            raise MergeError(f"Couldn't reach GitHub, so nothing was pushed. Try again when the connection works.\n\n{e}") from e
+        raise
     return update(cfg, pr, lambda s: setattr(s, "pushed", True))
 
 

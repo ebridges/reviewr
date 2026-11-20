@@ -254,6 +254,14 @@ export interface MergeSession {
 
 export interface MergeView { session: MergeSession | null; options: Record<string, ConflictOption[]> }
 
+export interface RemoteStatus {
+  ahead: number;
+  behind: number;
+  conflicted_files: string[];
+  commits: MergeCommit[];
+  fetch_error: string | null;
+}
+
 export interface MergePreview {
   base_ref: string;
   base_sha: string;
@@ -334,6 +342,8 @@ export const api = {
   open: (r: PRRef, opts: { path?: string; line?: number | null; editor: string }) =>
     call<{ argv: string[] }>(`${base(r)}/open`, send("POST", opts)),
   settings: () => call<Settings>("/api/settings"),
+  mergeRemote: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote`),
+  mergeRemoteSync: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote/sync`, send("POST", { confirm: true })),
   mergePreview: (r: PRRef) => call<MergePreview>(`${base(r)}/merge/preview`),
   merge: (r: PRRef) => call<MergeView>(`${base(r)}/merge`),
   mergeStart: (r: PRRef) => call<MergeView>(`${base(r)}/merge/start`, send("POST")),

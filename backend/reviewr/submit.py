@@ -61,7 +61,9 @@ def default_summary(pr: PullRequest, state: ReviewState) -> str:
     return "\n".join(lines).strip()
 
 
-def build_submission(pr: PullRequest, state: ReviewState, work: Path | None) -> Submission:
+def build_submission(pr: PullRequest, state: ReviewState, work: Path | None, push_base: str | None = None) -> Submission:
+    """`push_base` is what GitHub has for the branch (origin/<branch>, freshly fetched);
+    commits to push are counted against it, falling back to the PR head reviewr cached."""
     replies, missing = [], []
     open_ids = {t.id for t in pr.open_threads}
     for tid, d in state.decisions.items():
@@ -75,7 +77,7 @@ def build_submission(pr: PullRequest, state: ReviewState, work: Path | None) -> 
         replies.append(PlannedReply(thread_id=tid, decision=DECISION_LABEL[d.decision], body=d.reply, resolve=d.resolve))
     return Submission(
         branch=pr.head_ref,
-        commits_to_push=git.commits_ahead(work, pr.head_oid) if work and work.exists() else 0,
+        commits_to_push=git.commits_ahead(work, push_base or pr.head_oid) if work and work.exists() else 0,
         summary=state.summary if state.summary is not None else default_summary(pr, state),
         replies=replies,
         missing_replies=missing,
@@ -87,7 +89,7 @@ def execute(gh: GitHubClient, store: Store, pr: PullRequest, sub: Submission, wo
     done: list[str] = []
     if sub.commits_to_push and work:
         git.push(work, sub.branch)
-        done.append(f"Pushed {sub.commits_to_push} commits to {sub.branch}")
+        done.append(f"Pushed {sub.commits_to_push} commit{'s' if sub.commits_to_push != 1 else ''} to {sub.branch}")
 
     review_id = gh.mutate("start_review", prId=pr.node_id, body=sub.summary)[
         "addPullRequestReview"]["pullRequestReview"]["id"]

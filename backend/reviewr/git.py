@@ -365,7 +365,9 @@ def apply_to_worktree(worktree: Path, patch: str) -> None:
 
 
 def commits_ahead(worktree: Path, base: str) -> int:
-    return int(_git(worktree, "rev-list", "--count", f"{base}..HEAD").stdout.strip() or 0)
+    """Commits on HEAD's own line (first parents) that `base` doesn't have. A merge of
+    main counts as one commit, not as every commit it brings in from main."""
+    return int(_git(worktree, "rev-list", "--first-parent", "--count", f"{base}..HEAD", check=False).stdout.strip() or 0)
 
 
 def ahead_behind(worktree: Path, oid: str) -> tuple[int, int]:

@@ -322,6 +322,65 @@ def test_own_fix_proposed_then_applied(setup, monkeypatch, tmp_path):
     assert 'MSG = "hi"' in (clone / "app.py").read_text()
 
 
+def _push_to_origin_branch(origin: Path, files: dict[str, str], msg: str) -> None:
+    """Someone else adds a commit to the PR branch on GitHub."""
+    sh(origin, "checkout", "-q", "feature")
+    write(origin, files)
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-qm", msg)
+    sh(origin, "checkout", "-q", "main")
+
+
+def test_update_waits_for_github_commits_then_fast_forwards(setup):
+    cfg, pr, clone = setup
+    origin = clone.parent / "origin"
+    _push_to_origin_branch(origin, {"other.py": "o = 1\n"}, "Update branch on GitHub")
+    with pytest.raises(merge.MergeError, match="GitHub has 1 commit"):
+        merge.start(cfg, pr, no_ai)
+    st = merge.remote_status(cfg, pr)
+    assert (st["behind"], st["ahead"]) == (1, 0)
+    st = merge.sync_with_remote(cfg, pr)
+    assert st["behind"] == 0 and (clone / "other.py").exists()
+    assert sh(clone, "rev-parse", "HEAD") == sh(clone, "rev-parse", "origin/feature")  # fast-forward
+    merge.start(cfg, pr, no_ai)  # now allowed
+
+
+def test_sync_merges_when_both_sides_have_commits(setup):
+    cfg, pr, clone = setup
+    origin = clone.parent / "origin"
+    _push_to_origin_branch(origin, {"other.py": "o = 1\n"}, "on GitHub")
+    write(clone, {"mine.py": "m = 1\n"})
+    sh(clone, "add", "mine.py")
+    sh(clone, "commit", "-qm", "local work")
+    st = merge.sync_with_remote(cfg, pr)
+    assert (st["behind"], st["ahead"]) == (0, 2)  # local work + the merge commit
+    assert (clone / "other.py").exists() and (clone / "mine.py").exists()
+
+
+def test_sync_refuses_conflicts(setup):
+    cfg, pr, clone = setup
+    origin = clone.parent / "origin"
+    _push_to_origin_branch(origin, {"same.py": "a = 'github'\n"}, "on GitHub")
+    write(clone, {"same.py": "a = 'local'\n"})
+    sh(clone, "commit", "-qam", "local work")
+    head = sh(clone, "rev-parse", "HEAD")
+    assert merge.remote_status(cfg, pr)["conflicted_files"] == ["same.py"]
+    with pytest.raises(merge.MergeError, match="would conflict in: same.py"):
+        merge.sync_with_remote(cfg, pr)
+    assert sh(clone, "rev-parse", "HEAD") == head
+
+
+def test_sync_works_offline_from_last_fetch(setup):
+    """GitHub unreachable: the commits fetched earlier are merged anyway, and the result says so."""
+    cfg, pr, clone = setup
+    origin = clone.parent / "origin"
+    _push_to_origin_branch(origin, {"other.py": "o = 1\n"}, "on GitHub")
+    assert merge.remote_status(cfg, pr)["behind"] == 1  # fetched while reachable
+    origin.rename(clone.parent / "origin-gone")  # now unreachable
+    st = merge.sync_with_remote(cfg, pr)
+    assert st["behind"] == 0 and st["fetch_error"] and (clone / "other.py").exists()
+
+
 def test_agent_prompt_is_readable_and_editable(setup):
     """The Fix page shows this prompt; an edited one replaces it when drafting."""
     from reviewr.agent import agent_prompt, prompt_for
@@ -358,3 +417,15 @@ def test_interrupted_draft_is_marked_failed(setup, tmp_path):
     fixwork.recover_interrupted(st, pr)
     item = st.get_state(pr.ref).item(1)
     assert item.status == "failed" and "restarted" in item.error and item.prompt == "mine"
+
+
+def test_merge_of_main_counts_as_one_commit_to_push(setup):
+    """Respond's "commits to push": a merge counts once, not as every commit from main."""
+    from reviewr import git as g
+
+    cfg, pr, clone = setup
+    merge.start(cfg, pr, no_ai)
+    merge.update(cfg, pr, lambda s: [merge.resolve(c, merge.options_for(c)[0]) for c in s.conflicts.values()])
+    merge.commit(cfg, pr, "Merge main")
+    assert int(sh(clone, "rev-list", "--count", "origin/feature..HEAD")) == 2  # the merge and main's commit
+    assert g.commits_ahead(clone, "origin/feature") == 1

@@ -503,7 +503,17 @@ def _work_path(pr: PullRequest) -> Path | None:
 def get_submission(owner: str, repo: str, number: int) -> submit.Submission:
     ref = _ref(owner, repo, number)
     pr = _load_pr(ref)
-    return submit.build_submission(pr, store().get_state(ref), _work_path(pr))
+    return submit.build_submission(pr, store().get_state(ref), _work_path(pr), _github_branch(pr))
+
+
+def _github_branch(pr: PullRequest) -> str | None:
+    """GitHub's copy of the PR branch (origin/<branch>), fetched if it hasn't been in the
+    last minute; None if it isn't available locally."""
+    repo = load_config().repo_path(pr.ref.slug)
+    merge._fetch(repo, pr.head_ref, max_age=60)
+    ref = f"origin/{pr.head_ref}"
+    ok = git._git(repo, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
+    return ref if ok else None
 
 
 class SummaryRequest(BaseModel):
@@ -526,7 +536,7 @@ def post_submit(owner: str, repo: str, number: int, req: SubmitRequest) -> dict:
     ref = _ref(owner, repo, number)
     pr = _load_pr(ref, refresh=True)
     work = _work_path(pr)
-    sub = submit.build_submission(pr, store().get_state(ref), work)
+    sub = submit.build_submission(pr, store().get_state(ref), work, _github_branch(pr))
     if sub.missing_replies:
         raise HTTPException(409, f"{len(sub.missing_replies)} decided threads have no reply yet.")
     try:
@@ -607,6 +617,26 @@ def _pr_cfg(owner: str, repo: str, number: int):
 def get_merge_preview(owner: str, repo: str, number: int, fetch: bool = True) -> dict:
     cfg, pr = _pr_cfg(owner, repo, number)
     return _merge_call(merge.preview, cfg, pr, fetch)
+
+
+class ConfirmRequest(BaseModel):
+    confirm: bool = False
+
+
+@app.get(PR + "/merge/remote")
+def get_merge_remote(owner: str, repo: str, number: int) -> dict:
+    """Your checkout of the PR branch compared with the branch on GitHub."""
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return _merge_call(merge.remote_status, cfg, pr)
+
+
+@app.post(PR + "/merge/remote/sync")
+def post_merge_remote_sync(owner: str, repo: str, number: int, req: ConfirmRequest) -> dict:
+    """Bring GitHub's commits on the PR branch into your checkout. Only after you confirm."""
+    if not req.confirm:
+        raise HTTPException(400, "This changes your checkout, so it needs confirmation.")
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return _merge_call(merge.sync_with_remote, cfg, pr)
 
 
 @app.get(PR + "/merge")
@@ -757,10 +787,6 @@ class MergeCommitRequest(BaseModel):
 def post_merge_commit(owner: str, repo: str, number: int, req: MergeCommitRequest) -> MergeView:
     cfg, pr = _pr_cfg(owner, repo, number)
     return _merge_view(_merge_call(merge.commit, cfg, pr, req.message.strip() or f"Merge {pr.base_ref} into {pr.head_ref}"))
-
-
-class ConfirmRequest(BaseModel):
-    confirm: bool = False
 
 
 @app.post(PR + "/merge/push")
