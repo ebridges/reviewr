@@ -308,6 +308,34 @@ def apply_and_commit(worktree: Path, patch: str, message: str) -> str:
     return head_sha(worktree)
 
 
+def apply_index(worktree: Path, patch: str) -> None:
+    """Apply a patch to the working tree and the index (three-way if needed)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False) as f:
+        f.write(patch)
+    _git(worktree, "apply", "--3way", "--index", f.name)
+
+
+def staged_as(worktree: Path, patch: str, paths: list[str]) -> bool:
+    """Whether `patch` is already applied and staged, with no other edits to its files:
+    what a commit that failed after applying it leaves behind."""
+    with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False) as f:
+        f.write(patch)
+    if _git(worktree, "apply", "--check", "-R", "--cached", f.name, check=False).returncode != 0:
+        return False
+    return _git(worktree, "diff", "--quiet", "--", *paths, check=False).returncode == 0
+
+
+def restore_paths(worktree: Path, paths: list[str]) -> None:
+    """Put `paths` back as they are at HEAD, in the index and the working tree; files
+    that don't exist at HEAD are removed."""
+    for p in paths:
+        if _git(worktree, "cat-file", "-e", f"HEAD:{p}", check=False).returncode == 0:
+            _git(worktree, "restore", "--source=HEAD", "--staged", "--worktree", "--", p, check=False)
+        else:
+            _git(worktree, "rm", "-q", "--cached", "-f", "--ignore-unmatch", "--", p, check=False)
+            (worktree / p).unlink(missing_ok=True)
+
+
 def commit_paths(worktree: Path, message: str, paths: list[str]) -> str:
     """Commit exactly `paths` (new, changed or deleted), leaving everything else in the
     worktree and index as it was."""

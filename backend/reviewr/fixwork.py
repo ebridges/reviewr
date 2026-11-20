@@ -16,6 +16,7 @@ worktree (drafts/...) with a copy of the changes. Nothing is pushed until Respon
 from __future__ import annotations
 
 import logging
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +97,74 @@ def work_worktree(cfg: Config, pr: PullRequest) -> Path:
     repo = cfg.repo_path(pr.ref.slug)
     git.ensure_commits(repo, pr.head_oid)
     return existing_work_tree(cfg, pr) or git.ensure_branch_worktree(repo, work_root(cfg, pr), pr.head_ref, pr.head_oid)
+
+
+HOOK_TIMEOUT_S = 900
+
+
+def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, paths: list[str] | None = None) -> tuple[str, list[str]]:
+    """Commit, running the repository's commit hooks the way they run when you commit by
+    hand: with the branch's dependencies linked in (so hooks like ESLint find
+    node_modules) and the repo's PATH. With `paths`, only those files are committed.
+
+    If the hooks fail only because formatters changed files, those changes are staged
+    and the commit is tried once more, as you would by hand. Returns the commit and the
+    files the hooks changed. Raises git.GitError with the hooks' output otherwise."""
+    repo_cfg = cfg.repos[slug]
+    try:
+        links = envs.link_envs(cfg, slug, worktree)
+    except (envs.EnvError, OSError, subprocess.SubprocessError) as e:  # the hooks may still pass without them
+        log.warning("Couldn't link dependencies for commit hooks: %s", e)
+        links = []
+    env = envs.process_env(repo_cfg)
+    scope = paths if paths is not None else ["."]
+    excluded = [f":(exclude){p}" for p in envs.provided_paths(repo_cfg)]
+
+    def attempt() -> subprocess.CompletedProcess[str]:
+        argv = ["git", "-C", str(worktree), "commit", "-m", message] + (["--", *paths] if paths is not None else [])
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, errors="replace", env=env, timeout=HOOK_TIMEOUT_S, check=False)
+        except subprocess.TimeoutExpired as e:
+            raise git.GitError(f"The commit hooks didn't finish within {HOOK_TIMEOUT_S // 60} minutes; nothing was committed.") from e
+
+    try:
+        proc = attempt()
+        fixed: list[str] = []
+        if proc.returncode != 0:
+            fixed = git._git(worktree, "diff", "--name-only", "--", *scope, *excluded).stdout.split()
+            if fixed:
+                git._git(worktree, "add", "--", *fixed)
+                proc = attempt()
+        if proc.returncode != 0:
+            raise git.GitError(
+                "Your repository's commit hooks failed, so nothing was committed. Fix what they report, then try again.\n\n"
+                + (proc.stdout + proc.stderr).strip()[-4000:]
+            )
+        return git.head_sha(worktree), fixed
+    finally:
+        envs.unlink(links)
+
+
+def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str, message: str) -> tuple[str, list[str]]:
+    """Apply an agent's patch to your checkout and commit only its files, with your
+    commit hooks. Refuses if those files have edits of yours. If the commit fails, the
+    files are put back as they were, so nothing is left half-applied. A patch that a
+    failed earlier attempt left staged is committed as it is."""
+    paths = git.patch_paths(patch)
+    already = git.staged_as(work, patch, paths)
+    if not already:
+        if dirty := git.dirty_paths(work, paths):
+            raise git.GitError(
+                "These files have uncommitted changes in your checkout, so the patch wasn't applied: "
+                + ", ".join(dirty) + ". Commit or stash them, then try again."
+            )
+        git.apply_index(work, patch)
+    try:
+        return commit_with_hooks(cfg, pr.ref.slug, work, message, paths)
+    except git.GitError:
+        if not already:
+            git.restore_paths(work, paths)
+        raise
 
 
 def is_created_by_reviewr(cfg: Config, pr: PullRequest, path: Path) -> bool:
@@ -184,7 +253,7 @@ def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, messa
     item = store.get_state(pr.ref).item(item_id)
     if item.status != "ready" or not item.patch:
         raise ValueError("This work item has no drafted patch to accept.")
-    sha = git.apply_and_commit(work, item.patch, message)
+    sha, _ = apply_patch_and_commit(cfg, pr, work, item.patch, message)
 
     def committed(s: ReviewState) -> None:
         it = s.item(item_id)

@@ -186,6 +186,47 @@ def test_check_skips_when_too_many_tests(tmp_path):
     assert run.status == "skipped" and "limit of 3" in run.reason and len(run.tests) == 5
 
 
+def _hook(clone: Path, script: str) -> None:
+    hook = clone / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\n" + script)
+    hook.chmod(0o755)
+
+
+def _resolve_all(cfg, pr):
+    """Take main's side (or the deletion) everywhere, so app.py differs from the branch."""
+    merge.update(cfg, pr, lambda s: [merge.resolve(c, merge.options_for(c)[1]) for c in s.conflicts.values()])
+
+
+def test_commit_keeps_formatting_from_hooks(setup):
+    """A formatter hook that fails after changing files (as pre-commit does): the changes
+    are staged and the commit is retried once."""
+    cfg, pr, clone = setup
+    _hook(clone, """changed=0
+for f in $(git diff --cached --name-only --diff-filter=AM); do
+  if grep -q "'" "$f"; then sed -i.bak "s/'/\\"/g" "$f" && rm "$f.bak"; changed=1; fi
+done
+exit $changed
+""")
+    merge.start(cfg, pr, no_ai)
+    _resolve_all(cfg, pr)
+    s = merge.commit(cfg, pr, "Merge main")
+    assert s.status == "committed" and "app.py" in s.hook_fixes
+    assert "'" not in (clone / "app.py").read_text()
+    assert sh(clone, "rev-parse", "HEAD").strip() == s.commit_sha
+
+
+def test_commit_reports_failing_hooks(setup):
+    cfg, pr, clone = setup
+    head = sh(clone, "rev-parse", "HEAD").strip()
+    _hook(clone, "echo 'lint: 3 problems' >&2\nexit 1\n")
+    merge.start(cfg, pr, no_ai)
+    _resolve_all(cfg, pr)
+    with pytest.raises(merge.MergeError, match="(?s)commit hooks failed.*lint: 3 problems"):
+        merge.commit(cfg, pr, "Merge main")
+    assert merge.load(cfg, pr).status != "committed"
+    assert sh(clone, "rev-parse", "HEAD").strip() == head  # your checkout didn't move
+
+
 def test_agent_prompt_is_readable_and_editable(setup):
     """The Fix page shows this prompt; an edited one replaces it when drafting."""
     from reviewr.agent import agent_prompt, prompt_for

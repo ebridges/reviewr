@@ -117,6 +117,7 @@ class MergeSession(BaseModel):
     commits: list[Commit] = Field(default_factory=list)  # main's commits being merged in
     commit_count: int = 0
     commit_sha: str | None = None
+    hook_fixes: list[str] = Field(default_factory=list)  # files your commit hooks reformatted
     pushed: bool = False
     check_report: CheckReport | None = None
     checks_running: bool = False
@@ -591,7 +592,7 @@ def commit(cfg: Config, pr: PullRequest, message: str) -> MergeSession:
         write_resolved(cfg, pr, s)
         if _unmerged(tree):
             raise MergeError("Some files are still marked as conflicted in the merge worktree.")
-        git._git(tree, "commit", "-m", message)
+        s.hook_fixes = _commit_with_hooks(cfg, pr, tree, message)
         sha = git.head_sha(tree)
         ff = git._git(work, "merge", "--ff-only", sha, check=False)
         if ff.returncode != 0:
@@ -604,6 +605,14 @@ def commit(cfg: Config, pr: PullRequest, message: str) -> MergeSession:
         _save(cfg, pr, s)
         git.remove_worktree(cfg.repo_path(pr.ref.slug), tree)
         return s
+
+
+def _commit_with_hooks(cfg: Config, pr: PullRequest, tree: Path, message: str) -> list[str]:
+    """The merge commit, with your commit hooks (see fixwork.commit_with_hooks)."""
+    try:
+        return fixwork.commit_with_hooks(cfg, pr.ref.slug, tree, message)[1]
+    except git.GitError as e:
+        raise MergeError(str(e).replace("Fix what they report, then try again.", "Fix what they report, or adjust the resolution, then commit again.")) from e
 
 
 def push(cfg: Config, pr: PullRequest) -> MergeSession:

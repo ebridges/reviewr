@@ -232,6 +232,7 @@ export interface MergeSession {
   commits: MergeCommit[];
   commit_count: number;
   commit_sha: string | null;
+  hook_fixes: string[];
   pushed: boolean;
   check_report: CheckReport | null;
   checks_running: boolean;
