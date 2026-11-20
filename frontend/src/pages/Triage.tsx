@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PRContext } from "../App";
 import { api, type Decision, type ReviewState, type Thread } from "../api";
 import { Snippet, DiffView } from "../components/Code";
+import { Dot, FoldButton, useFolded } from "../components/Fold";
+import { KeyHelp } from "../components/KeyHelp";
 import { Markdown } from "../components/Markdown";
 import { DECISIONS, DECISION_HELP, GROUP_LABEL, decisionLabel, excerpt, prHref, storageGet, storageSet, threadTitle, useAIName, where } from "../lib";
 
@@ -54,6 +56,7 @@ export function Triage({ ctx, arg }: { ctx: PRContext; arg?: string }) {
   };
 
   const noSuggestions = Object.keys(state.suggestions).length === 0;
+  const queueFold = useFolded("triage-queue");
 
   return (
     <div className="triage">
@@ -75,12 +78,16 @@ export function Triage({ ctx, arg }: { ctx: PRContext; arg?: string }) {
           </p>
         )}
         {groups.map((g) => {
-          const rows = g.threads.filter(visible);
-          if (!rows.length) return null;
+          const all = g.threads.filter(visible);
+          if (!all.length) return null;
+          const folded = queueFold.isFolded(g.key);
+          // A folded group still shows the thread that's open in the card.
+          const rows = folded ? all.filter((t) => t.id === selected?.id && view === "card") : all;
           return (
             <div key={g.key}>
               <div className="queue-group">
-                <span className="grow">{g.label} · {g.threads.length}</span>
+                <FoldButton folded={folded} onClick={() => queueFold.toggle(g.key)} label={g.label} />
+                <span className="grow row-wrap group-head-click" onClick={() => queueFold.toggle(g.key)}><Dot kind={g.key} />{g.label} · {g.threads.length}</span>
                 {g.decision && view === "card" && (
                   <button className="link small" onClick={() => setViewSaved("list")}>Mark all</button>
                 )}
@@ -92,7 +99,8 @@ export function Triage({ ctx, arg }: { ctx: PRContext; arg?: string }) {
                     <span className="mark" aria-hidden="true">{d ? "✓" : ""}</span>
                     <span className="grow min0">
                       <span className="truncate block">{threadTitle(t, state)}</span>
-                      <span className="mono muted tiny">{where(t)}{d ? ` · ${decisionLabel(d.decision)}` : ""}</span>
+                      <span className="mono muted tiny">{where(t)}</span>
+                      {d && <span className="tiny decided-tag"><Dot kind={d.decision} /> {decisionLabel(d.decision)}</span>}
                     </span>
                   </button>
                 );
@@ -193,11 +201,20 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
     <div className="triage-card-wrap">
       <article className="card stack-gap">
         <div>
-          <div className="muted small row-wrap">
-            {thread.is_outdated && <span className="pill warn">Stale</span>}
-            {reviewer} · <span className="mono">{where(thread)}</span> ·
-            <a href={thread.comments[0]?.url} target="_blank" rel="noreferrer">View on GitHub</a> ·
-            <button className="link" onClick={openEditor}>Open in {editor}</button>
+          <div className="card-top">
+            <div className="muted small row-wrap grow">
+              {thread.is_outdated && <span className="pill warn">Stale</span>}
+              {reviewer} · <span className="mono">{where(thread)}</span> ·
+              <a href={thread.comments[0]?.url} target="_blank" rel="noreferrer">View on GitHub</a> ·
+              <button className="link" onClick={openEditor}>Open in {editor}</button>
+            </div>
+            <KeyHelp>
+              <div><span className="kbd">F R P A D</span> decide</div>
+              <div><span className="kbd">Enter</span> use {aiName}'s suggestion</div>
+              <div><span className="kbd">J</span> / <span className="kbd">K</span> next / previous</div>
+              <div><span className="kbd">E</span> open in editor</div>
+              <div><span className="kbd">Z</span> clear this decision</div>
+            </KeyHelp>
           </div>
           <h1 className="h-thread">{threadTitle(thread, state)}</h1>
           {status && <div className="muted tiny">{status}</div>}
@@ -260,7 +277,7 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
 
         {s && (
           <div className={`suggest ${s.stale_verdict === "not_addressed" ? "warn" : ""}`}>
-            <div className="strong small">{aiName} suggests: {decisionLabel(s.decision)}</div>
+            <div className="strong small row-wrap"><Dot kind={s.decision} />{aiName} suggests: {decisionLabel(s.decision)}</div>
             <p className="small">{s.reason}</p>
             {s.stale_verdict && (
               <p className="small muted">
@@ -304,8 +321,8 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
         )}
       </article>
 
+      {undecidedSimilar.length > 0 && (
       <aside className="stack">
-        {undecidedSimilar.length > 0 && (
           <section className="card">
             <h2>Same request elsewhere</h2>
             <p className="muted small">Your decision also applies to the checked threads.</p>
@@ -326,18 +343,8 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
               );
             })}
           </section>
-        )}
-        <section className="card">
-          <h2>Keyboard</h2>
-          <div className="muted small keys">
-            <div><span className="kbd">F R P A D</span> decide</div>
-            <div><span className="kbd">Enter</span> use {aiName}'s suggestion</div>
-            <div><span className="kbd">J</span> / <span className="kbd">K</span> next / previous</div>
-            <div><span className="kbd">E</span> open in editor</div>
-            <div><span className="kbd">Z</span> clear this decision</div>
-          </div>
-        </section>
       </aside>
+      )}
     </div>
   );
 }
@@ -345,6 +352,7 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
 function ThreadList({ ctx, groups, visible, onOpen }: { ctx: PRContext; groups: Group[]; visible: (t: Thread) => boolean; onOpen: (id: string) => void }) {
   const { pr, state } = ctx.data!;
   const aiName = useAIName();
+  const listFold = useFolded("triage-list");
   const [selected, setSelected] = useState<Record<string, Set<string>>>({});
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
@@ -402,11 +410,12 @@ function ThreadList({ ctx, groups, visible, onOpen }: { ctx: PRContext; groups: 
         const selectedDecided = [...s].filter((id) => state.decisions[id]);
         const toClear = selectedDecided.length ? selectedDecided : decidedRows;
         return (
-          <section key={g.key} className="card list">
-            <div className="list-head">
+          <section key={g.key} className={`card list dc-${g.key}`}>
+            <div className="list-head dc-edge">
+              <FoldButton folded={listFold.isFolded(g.key)} onClick={() => listFold.toggle(g.key)} label={g.label} />
               <input type="checkbox" aria-label="Select all" checked={rows.every((t) => s.has(t.id))}
                 onChange={(e) => setSelected({ ...selected, [g.key]: e.target.checked ? new Set(rows.map((t) => t.id)) : new Set() })} />
-              <h2 className="grow">{g.label} · {g.threads.length}{g.key === "stale" && <span className="muted small"> · decide each one after seeing where it pointed</span>}</h2>
+              <h2 className="grow row-wrap group-head-click" onClick={() => listFold.toggle(g.key)}><Dot kind={g.key} />{g.label} · {g.threads.length}{g.key === "stale" && <span className="muted small"> · decide each one after seeing where it pointed</span>}</h2>
               {g.decision ? (
                 <button className="btn sm" disabled={!s.size || busy === g.key} onClick={() => markGroup(g)}>
                   {busy === g.key ? "Marking…" : `Mark ${s.size} as ${decisionLabel(g.decision)}`}
@@ -418,7 +427,7 @@ function ThreadList({ ctx, groups, visible, onOpen }: { ctx: PRContext; groups: 
                 </button>
               )}
             </div>
-            {rows.map((t) => {
+            {!listFold.isFolded(g.key) && rows.map((t) => {
               const d = state.decisions[t.id];
               const sg = state.suggestions[t.id];
               return (
@@ -429,7 +438,7 @@ function ThreadList({ ctx, groups, visible, onOpen }: { ctx: PRContext; groups: 
                       <div className="truncate">{threadTitle(t, state)}</div>
                       <div className="mono muted tiny">{where(t)}</div>
                     </div>
-                    {sg && <span className="chip">{aiName} suggests: {decisionLabel(sg.decision)}</span>}
+                    {sg && <span className={`chip dc-chip dc-${sg.decision}`}>{aiName} suggests: {decisionLabel(sg.decision)}</span>}
                     {g.key === "stale" ? (
                       <button className="btn sm" onClick={() => onOpen(t.id)}>{d ? decisionLabel(d.decision) : "See trace"}</button>
                     ) : (

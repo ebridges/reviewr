@@ -65,6 +65,7 @@ export function Plan({ ctx }: { ctx: PRContext }) {
               <div className="muted small">{o.text}</div>
               {o.key === "defer" && <JiraSection ctx={ctx} />}
             </div>
+            {o.key === "fix" && <RegroupButton ctx={ctx} />}
           </div>
         ))}
       </section>
@@ -90,6 +91,21 @@ export function Plan({ ctx }: { ctx: PRContext }) {
   );
 }
 
+/** Regrouping replaces the work items, so it's offered only before any of them is started. */
+function RegroupButton({ ctx }: { ctx: PRContext }) {
+  const { pr, state } = ctx.data!;
+  const plan = useMutation({ mutationFn: () => api.plan(pr.ref), onSuccess: ctx.setState });
+  if (!state.plan.length || state.plan.some((w) => w.status !== "pending")) return null;
+  return (
+    <div className="stack-tight">
+      <button className="btn sm" onClick={() => plan.mutate()} disabled={plan.isPending} title="Ask again how to group the fixes into work items">
+        {plan.isPending ? "Grouping…" : "Regroup"}
+      </button>
+      {plan.error && <span className="error tiny">{(plan.error as Error).message}</span>}
+    </div>
+  );
+}
+
 function WorkItems({ ctx, fixes }: { ctx: PRContext; fixes: number }) {
   const { pr, state } = ctx.data!;
   const aiName = useAIName();
@@ -101,20 +117,17 @@ function WorkItems({ ctx, fixes }: { ctx: PRContext; fixes: number }) {
   const counts = { drafting: 0, ready: 0, pending: 0, failed: 0, committed: 0 };
   for (const w of state.plan) if (w.mode === "agent" || w.status === "committed") counts[w.status]++;
   const agentWaiting = state.plan.filter((w) => w.mode === "agent" && (w.status === "pending" || w.status === "failed")).length;
-  const started = state.plan.some((w) => w.status !== "pending");
-  const firstOpen = state.plan.find((w) => w.status !== "committed");
 
   return (
     <section className="stack">
       <div className="row-between">
         <h2 className="section-title">Work items{state.plan.length ? ` · ${state.plan.length}` : ""}</h2>
         <div className="row-wrap">
-          {!started && (
-            <button className={`btn ${state.plan.length ? "" : "primary"}`} onClick={() => plan.mutate()} disabled={plan.isPending}>
-              {plan.isPending ? "Grouping…" : state.plan.length ? "Regroup" : `Group ${fixes} fix${fixes === 1 ? "" : "es"} into work items`}
+          {!state.plan.length && (
+            <button className="btn primary" onClick={() => plan.mutate()} disabled={plan.isPending}>
+              {plan.isPending ? "Grouping…" : `Group ${fixes} fix${fixes === 1 ? "" : "es"} into work items`}
             </button>
           )}
-          {firstOpen && <a className="btn primary" href={prHref(pr.ref, "fix", String(firstOpen.id))}>Start item {firstOpen.id}</a>}
         </div>
       </div>
       {!state.plan.length && !plan.isPending && (
@@ -144,16 +157,18 @@ function WorkItems({ ctx, fixes }: { ctx: PRContext; fixes: number }) {
               <span className="item-n">{w.id}</span>
               <div className="grow min0">
                 <a className="strong" href={prHref(pr.ref, "fix", String(w.id))}>{w.title}</a>
-                <div className="muted small">{files.size} file{files.size === 1 ? "" : "s"}</div>
+                <div className="muted small">
+                  {files.size} file{files.size === 1 ? "" : "s"} ·{" "}
+                  <button className="threads-link" aria-expanded={expanded === w.id} onClick={() => setExpanded(expanded === w.id ? undefined : w.id)}>
+                    {w.thread_ids.length} thread{w.thread_ids.length === 1 ? "" : "s"} {expanded === w.id ? "▴" : "▾"}
+                  </button>
+                </div>
               </div>
               <span className={`pill ${w.status === "committed" ? "ok" : w.status === "failed" ? "warn" : ""}`}>{itemStatus(w)}</span>
               <div className="seg" role="group" aria-label="Who does this item">
                 <button className={w.mode === "agent" ? "on" : ""} disabled={w.status === "committed"} onClick={() => setMode(w.id, "agent")}>Agent drafts</button>
                 <button className={w.mode === "me" ? "on" : ""} disabled={w.status === "committed"} onClick={() => setMode(w.id, "me")}>I'll do it</button>
               </div>
-              <button className="threads-link" aria-expanded={expanded === w.id} onClick={() => setExpanded(expanded === w.id ? undefined : w.id)}>
-                {w.thread_ids.length} thread{w.thread_ids.length === 1 ? "" : "s"} {expanded === w.id ? "▴" : "▾"}
-              </button>
             </div>
             {expanded === w.id && (
               <ul className="thread-list">

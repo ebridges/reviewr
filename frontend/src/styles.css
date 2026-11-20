@@ -348,3 +348,35 @@ textarea.input { resize: vertical; }
 .file-diff summary { cursor: pointer; list-style: revert; }
 .error-box { color: var(--warn); }
 .error-box div { white-space: pre-wrap; }
+
+/* Keyboard shortcut help */
+.key-help { position: relative; display: inline-flex; }
+.help-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 50%; background: transparent; color: var(--fg-muted); cursor: pointer; }
+.help-btn:hover, .help-btn[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
+.help-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 260px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); text-align: left; }
+.card-top { display: flex; align-items: flex-start; gap: 8px; }
+.card-top .key-help { margin-top: -4px; }
+.stack-tight { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.small .threads-link { padding: 0; font-size: inherit; }
+
+/* Decision categories: one color each, used for dots, group edges and suggestion chips */
+.dc-fix { --dc: #e5484d; }
+.dc-reply { --dc: #3e8ef7; }
+.dc-push_back { --dc: #f0793a; }
+.dc-already_done { --dc: #30a46c; }
+.dc-defer { --dc: #9b6bf2; }
+.dc-no_action { --dc: #8b8d98; }
+.dc-stale { --dc: #e0a92e; }
+.dc-none { --dc: var(--border-strong); }
+.dc-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--dc); flex: none; }
+.dc-edge { border-left: 4px solid var(--dc); }
+.chip.dc-chip { background: color-mix(in srgb, var(--dc) 12%, transparent); border-color: color-mix(in srgb, var(--dc) 55%, transparent); color: var(--fg); display: inline-flex; align-items: center; gap: 6px; }
+.chip.dc-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dc); }
+.fold-btn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: none; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; flex: none; }
+.fold-btn:hover { background: var(--surface-2); color: var(--fg); }
+.fold-btn svg { transition: transform 0.12s; }
+.fold-btn.folded svg { transform: rotate(-90deg); }
+.queue-group { cursor: default; }
+.group-head-click { cursor: pointer; user-select: none; }
+.decided-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; color: var(--fg-muted); }
+.group-block .bucket { border-left: 4px solid var(--dc); padding-left: 8px; }

@@ -4,6 +4,7 @@ import type { PRContext } from "../App";
 import { api, type Decision, type Thread } from "../api";
 import { GROUP_LABEL, decisionLabel, excerpt, prHref, threadTitle, useAIName, where } from "../lib";
 import { BranchStatusCard } from "./Merge";
+import { Dot, FoldButton, useFolded } from "../components/Fold";
 
 const GROUP_DETAIL: Record<Decision, string> = {
   fix: "Clear requests for a code change. These become work items in Plan.",
@@ -62,6 +63,7 @@ export function Overview({ ctx }: { ctx: PRContext }) {
     },
   ];
   const groups = allGroups.filter((g) => g.threads.length > 0);
+  const fold = useFolded("overview");
 
   const byReviewer = new Map<string, number>();
   for (const t of open) byReviewer.set(t.comments[0]?.author ?? "ghost", (byReviewer.get(t.comments[0]?.author ?? "ghost") ?? 0) + 1);
@@ -102,18 +104,19 @@ export function Overview({ ctx }: { ctx: PRContext }) {
           {suggest.error && <p className="error small">{(suggest.error as Error).message}</p>}
           {result && !suggest.isPending && <p className="result-line small">{result}</p>}
           {groups.map((g) => (
-            <div key={g.key} className="group-block">
+            <div key={g.key} className={`group-block dc-${g.key}`}>
               <div className="bucket">
+                <FoldButton folded={fold.isFolded(g.key)} onClick={() => fold.toggle(g.key)} label={g.label} />
                 <div className="bucket-n">{g.threads.length}</div>
-                <div className="grow">
-                  <div className="strong">{g.label}</div>
+                <div className="grow group-head-click" onClick={() => fold.toggle(g.key)}>
+                  <div className="strong row-wrap"><Dot kind={g.key} />{g.label}</div>
                   <div className="muted small">{g.detail}</div>
                 </div>
                 <a className="btn sm" href={prHref(pr.ref, "triage", encodeURIComponent(g.threads[0].id))}>
                   {g.key === "stale" ? "Review stale" : "Triage these"}
                 </a>
               </div>
-              <ThreadRows ctx={ctx} threads={g.threads} />
+              {!fold.isFolded(g.key) && <ThreadRows ctx={ctx} threads={g.threads} />}
             </div>
           ))}
         </section>
