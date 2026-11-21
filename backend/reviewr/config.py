@@ -1,6 +1,8 @@
 """Load reviewr.toml.
 
-Search order: $REVIEWR_CONFIG, ./reviewr.toml, ../reviewr.toml, ~/.config/reviewr/config.toml.
+Search order: $REVIEWR_CONFIG, ./reviewr.toml, ../reviewr.toml, reviewr.toml at the
+project root (so `reviewr open` finds it from any folder), ~/.config/reviewr/config.toml.
+.env is read from the same places, ending with ~/.config/reviewr/.env (the packaged app's).
 """
 
 from __future__ import annotations
@@ -12,6 +14,11 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+# The project folder (backend/reviewr/config.py -> ../../). In the packaged app this is
+# inside the bundle and holds no config; CONFIG_DIR is used instead.
+_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = Path("~/.config/reviewr").expanduser()
 
 # {root}: the worktree, opened as the project (an already-open window for it is reused);
 # {path}, {line}: the file inside it.
@@ -124,7 +131,8 @@ def _find_config_file() -> Path | None:
         os.environ.get("REVIEWR_CONFIG"),
         "reviewr.toml",
         "../reviewr.toml",
-        "~/.config/reviewr/config.toml",
+        str(_ROOT / "reviewr.toml"),
+        str(CONFIG_DIR / "config.toml"),
     ]
     for c in candidates:
         if c and (p := Path(c).expanduser()).is_file():
@@ -139,7 +147,7 @@ DOTENV_KEYS: set[str] = set()
 
 def load_dotenv() -> None:
     """Load KEY=VALUE lines from the project's .env without overriding the environment."""
-    for candidate in (Path(".env"), Path("../.env")):
+    for candidate in (Path(".env"), Path("../.env"), _ROOT / ".env", CONFIG_DIR / ".env"):
         if candidate.is_file():
             for line in candidate.read_text().splitlines():
                 line = line.strip().removeprefix("export ").strip()

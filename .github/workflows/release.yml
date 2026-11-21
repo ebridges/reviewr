@@ -1,0 +1,123 @@
+# Runs when a vX.Y.Z tag is pushed (`npm run release -- minor` makes and pushes one).
+# Builds the macOS app, creates the GitHub Release with notes made from the commit
+# messages since the previous tag, attaches the .dmg and .zip, and pushes the same files
+# to GitHub Packages (ghcr.io) as an OCI artifact.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release
+  packages: write # push to ghcr.io
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Apple Silicon; the app is built for arm64 only.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the release notes need the previous tag
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Tag matches the version files
+        run: node scripts/release.mjs --check "$GITHUB_REF_NAME"
+
+      - name: Install
+        run: |
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+
+      - name: Test
+        working-directory: backend
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          uv sync
+          uv run pytest -q
+
+      - name: Build the app
+        run: ./scripts/package.sh
+
+      - name: Check the packaged app starts
+        run: |
+          app=desktop/release/mac-arm64/reviewr.app
+          "$app/Contents/Resources/bin/reviewr" --version
+          REVIEWR_SMOKE="$RUNNER_TEMP/smoke.png" "$app/Contents/MacOS/reviewr"
+          test -s "$RUNNER_TEMP/smoke.png"
+
+      - name: Release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: release-notes.md
+
+      - name: Add install instructions to the notes
+        run: |
+          cat >> release-notes.md <<'EOF'
+
+          ### Install
+
+          Download the `.dmg` (Apple Silicon Macs) and drag reviewr to Applications. The app
+          isn't signed with an Apple Developer ID, so macOS blocks the first open. Clear the
+          download quarantine once:
+
+          ```bash
+          xattr -dr com.apple.quarantine /Applications/reviewr.app
+          ```
+
+          Then put your config in `~/.config/reviewr/` (`config.toml`, and `.env` with
+          `ANTHROPIC_API_KEY`). See the README for details.
+          EOF
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          prerelease=""
+          case "$version" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            desktop/release/reviewr-"$version"-arm64.dmg \
+            desktop/release/reviewr-"$version"-arm64.zip \
+            --verify-tag --title "reviewr $version" --notes-file release-notes.md $prerelease
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Push to GitHub Packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/$owner/reviewr"
+          echo "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          cd desktop/release
+          oras push "$image:$version" \
+            --artifact-type application/vnd.reviewr.macos-app \
+            --annotation "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --annotation "org.opencontainers.image.version=$version" \
+            --annotation "org.opencontainers.image.description=reviewr desktop app for macOS (Apple Silicon)" \
+            "reviewr-$version-arm64.dmg:application/x-apple-diskimage" \
+            "reviewr-$version-arm64.zip:application/zip"
+          case "$version" in
+            *-*) ;;
+            *) oras tag "$image:$version" latest ;;
+          esac

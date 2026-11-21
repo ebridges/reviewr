@@ -1,0 +1,15 @@
+# Open PRs whose head branch is $branch, for `reviewr open`. Cost: 1 point.
+# headRefName matches branches of that name in forks too, so the caller checks
+# headRepository against the repo the branch is pushed to.
+query PRsForBranch($owner: String!, $repo: String!, $branch: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(headRefName: $branch, states: OPEN, first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        headRepository { owner { login } name }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}

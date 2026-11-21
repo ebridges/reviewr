@@ -5,9 +5,16 @@
 // (frontend/dist), so the window loads everything from one local address.
 // Quitting the app stops the backend.
 //
+// In the packaged app (electron-builder, see package.json) the backend is the PyInstaller
+// build in Resources/backend/reviewr and the frontend is in Resources/ui. It reads its
+// config from ~/.config/reviewr (config.toml and .env).
+//
 //   npm start     build the frontend, then open the app
 //   npm run open  open the app with the frontend already built
 //   npm run dev   hot reload: Vite dev server on :5173, backend with --reload on :8765
+//
+// --reviewr-route=#/pr/owner/repo/1/overview opens the window on that page. `reviewr open`
+// passes it; if the app is already running, the running window switches to the page.
 //
 // REVIEWR_SMOKE=/path/to/shot.png opens the app, saves a screenshot of the window once
 // it has loaded, and quits. Used to check that startup works. REVIEWR_SMOKE_ROUTE
@@ -21,11 +28,23 @@ const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
-const DEV = process.env.REVIEWR_DEV === "1";
-const ICON = path.join(__dirname, "build", "icon.png"); // made from build/icon.svg; icon.icns is for packaging
+const PACKAGED = app.isPackaged;
+const DEV = !PACKAGED && process.env.REVIEWR_DEV === "1";
+const CONFIG_DIR = path.join(os.homedir(), ".config", "reviewr");
+// Made from build/icon.svg; icon.icns is for packaging. Electron's default icon is used
+// when the file isn't there (build/ isn't in the repo).
+const ICON_FILE = path.join(__dirname, "build", "icon.png");
+const ICON = fs.existsSync(ICON_FILE) ? ICON_FILE : undefined;
 const SMOKE = process.env.REVIEWR_SMOKE;
 const children = [];
 let logStream;
+
+// The hash route from --reviewr-route, or "" if there is none or it isn't a plain route.
+function routeFrom(argv) {
+  const arg = argv.find((a) => a.startsWith("--reviewr-route="));
+  const route = arg ? arg.slice("--reviewr-route=".length) : "";
+  return /^#\/[A-Za-z0-9_.\-/]*$/.test(route) ? route : "";
+}
 
 // Apps started from Finder get a minimal PATH. Add the usual places for uv, gh, node
 // and the claude CLI (used by the coding agent) so the backend finds them.
@@ -43,8 +62,8 @@ function log(line) {
   logStream.write(line);
 }
 
-function start(cmd, args, cwd) {
-  const child = spawn(cmd, args, { cwd, env: childEnv(), detached: true });
+function start(cmd, args, cwd, env = {}) {
+  const child = spawn(cmd, args, { cwd, env: { ...childEnv(), ...env }, detached: true });
   child.stdout.on("data", (d) => log(d.toString()));
   child.stderr.on("data", (d) => log(d.toString()));
   child.on("exit", (code) => log(`\n[${cmd} exited with ${code}]\n`));
@@ -114,6 +133,22 @@ async function startServers() {
     return "http://localhost:5173/";
   }
 
+  if (PACKAGED) {
+    const port = await freePort();
+    const bin = path.join(process.resourcesPath, "backend", "reviewr", "reviewr");
+    // Run from the config folder so the backend's ./reviewr.toml and ./.env lookups find
+    // nothing unexpected; it reads ~/.config/reviewr/config.toml and .env.
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    const backend = start(bin, ["serve", "--port", String(port)], CONFIG_DIR, {
+      REVIEWR_UI_DIST: path.join(process.resourcesPath, "ui"),
+    });
+    const base = `http://127.0.0.1:${port}`;
+    if (!(await waitFor(`${base}/api/health`, 90, backend))) {
+      throw new Error("The backend didn't start.");
+    }
+    return `${base}/`;
+  }
+
   if (!fs.existsSync(path.join(ROOT, "frontend", "dist", "index.html"))) {
     throw new Error("The frontend isn't built yet. Run `npm start` (which builds it) instead of `npm run open`.");
   }
@@ -126,7 +161,7 @@ async function startServers() {
   return `${base}/`;
 }
 
-function createWindow(url) {
+function createWindow(url, route = "") {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -162,16 +197,20 @@ function createWindow(url) {
     });
   }
   // A new build of the frontend may be on disk; never show a cached older one.
-  win.webContents.session.clearCache().finally(() => win.loadURL(url + (SMOKE && process.env.REVIEWR_SMOKE_ROUTE ? process.env.REVIEWR_SMOKE_ROUTE : "")));
+  const start = SMOKE && process.env.REVIEWR_SMOKE_ROUTE ? process.env.REVIEWR_SMOKE_ROUTE : route;
+  win.webContents.session.clearCache().finally(() => win.loadURL(url + start));
   return win;
 }
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
     const [win] = BrowserWindow.getAllWindows();
     if (win) {
+      const route = routeFrom(argv);
+      // routeFrom only accepts [A-Za-z0-9_.-/] after "#/", and JSON.stringify quotes it.
+      if (route) win.webContents.executeJavaScript(`location.hash = ${JSON.stringify(route)}`);
       if (win.isMinimized()) win.restore();
       win.focus();
     }
@@ -179,10 +218,10 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     app.setName("reviewr");
-    if (process.platform === "darwin") app.dock.setIcon(ICON);
+    if (process.platform === "darwin" && ICON) app.dock.setIcon(ICON);
     try {
       const url = await startServers();
-      createWindow(url);
+      createWindow(url, routeFrom(process.argv));
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
       });

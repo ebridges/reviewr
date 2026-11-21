@@ -1,5 +1,7 @@
 """Command line entry point.
 
+    reviewr                       same as `reviewr open`
+    reviewr open [FOLDER | PR]    open the app on the PR for the folder's branch (default: .)
     reviewr serve                 start the API on 127.0.0.1:8765
     reviewr fetch <PR URL>        fetch a PR into the cache and print a summary
 """
@@ -8,18 +10,30 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from collections import Counter
+from pathlib import Path
 
 
 def main() -> None:
+    from reviewr import __version__
+
     parser = argparse.ArgumentParser(prog="reviewr")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser.add_argument("--version", action="version", version=f"reviewr {__version__}")
+    sub = parser.add_subparsers(dest="cmd")
+    open_ = sub.add_parser("open", help="open the app on the PR for a folder's branch")
+    open_.add_argument("target", nargs="?", default=".", help="a folder (default: .), a PR URL or owner/repo#N")
+    open_.add_argument("--no-launch", action="store_true", help="print the PR without opening the app")
     serve = sub.add_parser("serve")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--reload", action="store_true")
     fetch = sub.add_parser("fetch")
     fetch.add_argument("pr", help="PR URL or owner/repo#N")
     args = parser.parse_args()
+
+    if args.cmd in (None, "open"):
+        logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+        sys.exit(_open(getattr(args, "target", "."), launch=not getattr(args, "no_launch", False)))
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -29,6 +43,61 @@ def main() -> None:
         uvicorn.run("reviewr.api:app", host="127.0.0.1", port=args.port, reload=args.reload)
     elif args.cmd == "fetch":
         _fetch(args.pr)
+
+
+def _open(target: str, launch: bool) -> int:
+    from reviewr import launch as launcher
+    from reviewr.config import load_config, load_dotenv
+    from reviewr.github.client import GitHubClient, GitHubError
+    from reviewr.models import PRRef
+
+    load_dotenv()
+    checkout = None
+    try:
+        ref, title = PRRef.parse(target), None
+    except ValueError:
+        ref = title = None
+        path = Path(target).expanduser()
+        if not path.is_dir():
+            print(f"reviewr: {target} is neither a folder nor a PR (URL or owner/repo#N).", file=sys.stderr)
+            return 2
+        try:
+            checkout = launcher.read_checkout(path)
+        except LookupError as e:
+            print(f"{e} Opening the PR list.")
+        else:
+            if not checkout.branch:
+                print("HEAD is detached, so there's no branch to look up. Opening the PR list.")
+            elif not checkout.slugs:
+                print(f"{checkout.root} has no github.com remote. Opening the PR list.")
+            else:
+                try:
+                    found = launcher.find_pr(GitHubClient(), checkout)
+                except GitHubError as e:
+                    print(f"Couldn't look up the PR: {e}\nOpening the PR list.")
+                    found = None
+                else:
+                    if not found:
+                        repos = ", ".join(checkout.slugs[: launcher.MAX_REPOS])
+                        print(f"No open PR for {checkout.remote_branch} in {repos}. Opening the PR list.")
+                if found:
+                    ref, title = found
+
+    if ref:
+        print(f"{ref.key}: {title}" if title else ref.key)
+        if ref.slug not in load_config().repos:
+            clone = checkout.clone if checkout else Path("~/path/to/clone")
+            print(
+                f"\nreviewr.toml has no clone for {ref.slug}, so the app can't show diffs or fix "
+                f'anything yet. Add:\n\n[repos."{ref.slug}"]\npath = "{clone}"'
+            )
+    if launch:
+        try:
+            launcher.launch_app(launcher.pr_route(ref) if ref else None)
+        except launcher.LaunchError as e:
+            print(f"reviewr: {e}", file=sys.stderr)
+            return 1
+    return 0
 
 
 def _fetch(text: str) -> None:

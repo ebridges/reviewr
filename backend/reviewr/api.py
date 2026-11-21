@@ -973,7 +973,9 @@ def put_ai(req: ProviderRequest) -> dict:
 @app.get("/api/health")
 def get_health() -> dict:
     """Used by the desktop app to know the backend is up."""
-    return {"ok": True}
+    from reviewr import __version__
+
+    return {"ok": True, "version": __version__}
 
 
 @app.get("/api/config")

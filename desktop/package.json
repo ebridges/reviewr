@@ -1,5 +1,6 @@
 {
   "name": "reviewr-desktop",
+  "productName": "reviewr",
   "private": true,
   "version": "0.1.0",
   "description": "reviewr as a desktop app",
@@ -7,9 +8,41 @@
   "scripts": {
     "start": "npm --prefix ../frontend run build && electron .",
     "open": "electron .",
-    "dev": "REVIEWR_DEV=1 electron ."
+    "dev": "REVIEWR_DEV=1 electron .",
+    "dist": "electron-builder --mac --arm64 --publish never"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.github.ebridges.reviewr",
+    "productName": "reviewr",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "package.json",
+      "build/icon.png"
+    ],
+    "extraResources": [
+      { "from": "../backend/dist/reviewr", "to": "backend/reviewr" },
+      { "from": "../frontend/dist", "to": "ui" },
+      { "from": "../bin/reviewr", "to": "bin/reviewr" }
+    ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "afterPack": "./adhoc-sign.cjs",
+    "publish": null
   }
 }

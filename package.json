@@ -1,10 +1,14 @@
 {
   "name": "reviewr",
+  "version": "0.1.0",
   "private": true,
   "description": "Review and respond to comments on very large pull requests",
   "scripts": {
     "setup": "cd backend && uv sync && cd ../frontend && npm install && cd ../desktop && npm install",
     "start": "npm --prefix desktop start",
-    "dev": "npm --prefix desktop run dev"
+    "dev": "npm --prefix desktop run dev",
+    "package": "./scripts/package.sh",
+    "release": "node scripts/release.mjs",
+    "notes": "npx --yes git-cliff@2.6.1 --unreleased --strip header"
   }
 }

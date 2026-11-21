@@ -1,0 +1,19 @@
+#!/bin/sh
+# reviewr from any folder. `reviewr` opens the app on the PR for the branch checked out
+# in the current folder; `reviewr --help` lists the other commands.
+#
+# Put it on your PATH once. From a source checkout:
+#   ln -s "$PWD/bin/reviewr" ~/.local/bin/reviewr
+# From the installed app:
+#   ln -s /Applications/reviewr.app/Contents/Resources/bin/reviewr ~/.local/bin/reviewr
+set -e
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# The packaged app: this script is in Contents/Resources/bin, the backend beside it.
+if [ -f "$root/backend/reviewr/reviewr" ] && [ -x "$root/backend/reviewr/reviewr" ]; then
+  exec "$root/backend/reviewr/reviewr" "$@"
+fi
+if [ -x "$root/backend/.venv/bin/reviewr" ]; then
+  exec "$root/backend/.venv/bin/reviewr" "$@"
+fi
+# --project (unlike --directory) keeps the current folder, which `reviewr open` reads.
+exec uv run --quiet --project "$root/backend" reviewr "$@"

@@ -7,3 +7,8 @@ dist/
 .DS_Store
 .env
 *.tsbuildinfo
+# The `reviewr` command; overrides a global ignore of bin/.
+!bin/
+# Packaging output (scripts/package.sh).
+backend/build/
+desktop/release/

@@ -16,6 +16,9 @@ dependencies = [
 reviewr = "reviewr.cli:main"
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.10",
+]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [build-system]
