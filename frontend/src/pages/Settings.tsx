@@ -102,25 +102,8 @@ export function Settings() {
             </div>
           </div>
           {draft.ai.claude_auth === "ant" ? (
-            <div className="option stack-gap">
-              <p className="muted small">
-                Sign in once in your browser; there's no key to copy or store. reviewr uses the profile the ant CLI saves.
-                {d.config.ai.claude_auth !== "ant" && " Save to switch to this sign-in."}
-              </p>
-              {d.claude.ant_installed ? (
-                <div className="row-wrap">
-                  <button className="btn sm" onClick={() => login.mutate()} disabled={login.isPending || d.claude.login_running}>
-                    {d.claude.login_running ? "Waiting for the browser…" : "Sign in with the ant CLI"}
-                  </button>
-                  {login.error && <span className="error small">{(login.error as Error).message}</span>}
-                </div>
-              ) : (
-                <>
-                  <p className="small">Install the ant CLI first, then come back and sign in:</p>
-                  <pre className="cmd">brew install anthropics/tap/ant</pre>
-                </>
-              )}
-            </div>
+            <AntSignIn claude={d.claude} switching={d.config.ai.claude_auth !== "ant"}
+              onLogin={() => login.mutate()} pending={login.isPending} error={login.error as Error | null} />
           ) : (
             <SecretField name="anthropic_api_key" label="API key" saved={d.secrets.anthropic_api_key} placeholder="sk-ant-…"
               note="Saved in your macOS Keychain, never in a file." onSaved={onSaved} />
@@ -259,6 +242,50 @@ export function Settings() {
         </div>
       )}
     </main>
+  );
+}
+
+function AntSignIn({ claude, switching, onLogin, pending, error }: {
+  claude: SettingsData["claude"]; switching: boolean; onLogin: () => void; pending: boolean; error: Error | null;
+}) {
+  const profiles = claude.ant_profiles;
+  const signedIn = profiles.length > 0;
+  const waiting = pending || claude.login_running;
+  return (
+    <div className="option stack-gap">
+      {!claude.ant_installed && !signedIn ? (
+        <>
+          <p className="muted small">Sign in once in your browser; there's no key to copy or store. Install the ant CLI first, then come back and sign in:</p>
+          <pre className="cmd">brew install anthropics/tap/ant</pre>
+        </>
+      ) : signedIn ? (
+        <>
+          <p className="small">
+            <span className="pill ok">Signed in</span>{" "}
+            reviewr uses your ant CLI sign-in ({profiles.length === 1 ? "profile" : "profiles"} <span className="mono">{profiles.join(", ")}</span>)
+            for every Claude call.{switching && " Save to switch to this sign-in."}
+          </p>
+          {claude.ant_installed && (
+            <p className="muted small">
+              {waiting ? "Waiting for the browser…" : (
+                <>If the sign-in expires or you want another workspace, <button className="link small" onClick={onLogin}>sign in again</button>.</>
+              )}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="muted small">
+            Sign in once in your browser; there's no key to copy or store. reviewr uses the profile the ant CLI saves.
+            {switching && " Save to switch to this sign-in."}
+          </p>
+          <div className="row-wrap">
+            <button className="btn sm" onClick={onLogin} disabled={waiting}>{waiting ? "Waiting for the browser…" : "Sign in with the ant CLI"}</button>
+          </div>
+        </>
+      )}
+      {error && <span className="error small">{error.message}</span>}
+    </div>
   );
 }
 

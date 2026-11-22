@@ -1040,6 +1040,7 @@ def _claude_status() -> dict:
     else:
         ready, detail = False, "Not signed in with the ant CLI" if ant_installed else "The ant CLI isn't installed"
     return {"method": method, "ready": ready, "detail": detail, "ant_installed": ant_installed,
+            "ant_profiles": _ant_profiles(),
             "login_running": _ant_login.get("proc") is not None and _ant_login["proc"].poll() is None}
 
 
