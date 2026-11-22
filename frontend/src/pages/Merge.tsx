@@ -5,6 +5,7 @@ import {
   api, type Conflict, type RemoteStatus, type ConflictCategory, type ConflictOption, type MergeSession, type MergeView, type PRRef,
 } from "../api";
 import { CheckoutPath } from "../components/CheckoutPath";
+import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { CheckRow } from "../components/ChecksPanel";
 import { DiffView } from "../components/Code";
 import { Inline } from "../components/Inline";
@@ -848,33 +849,33 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
   useEffect(() => { if (rejected) remote.refetch(); }, [rejected]); // eslint-disable-line react-hooks/exhaustive-deps
   const behindGitHub = (remote.data?.behind ?? 0) > 0;
   const again = useMutation({ mutationFn: () => api.mergeDiscard(prRef), onSuccess: setView });
+  const checkout = useCheckoutDetails(prRef);
+  const n = Object.keys(s.conflicts).length;
   return (
     <main className="page narrow">
-      <section className="card stack-gap">
-        <h1>Merged {s.base_ref} into {s.head_ref}</h1>
-        <p className="small">
-          Commit <span className="mono">{s.commit_sha?.slice(0, 10)}</span> is on your checkout of {s.head_ref}, with{" "}
-          {plural(Object.keys(s.conflicts).length, "conflict")} resolved and {plural(s.commit_count, "commit")} from {s.base_ref}.
-        </p>
+      <ResultCard
+        prRef={prRef}
+        title="Successfully merged"
+        status={s.pushed ? "Pushed" : "Not pushed"}
+        tone={s.pushed ? "ok" : "warn"}
+        summary={<>Your merge was successful, with {plural(n, "conflict")} resolved and {plural(s.commit_count, "commit")} from {s.base_ref}.</>}
+        details={[...checkout, { label: "Commit", value: s.commit_sha }]}
+        actions={<button className="link small" onClick={() => again.mutate()} disabled={again.isPending}>Check {s.base_ref} for newer commits</button>}
+      >
         {s.hook_fixes.length > 0 && (
           <div className="small">
-            Your repository's commit hooks reformatted {plural(s.hook_fixes.length, "file")}, and those changes are part of the
-            merge commit:
+            Your repository's commit hooks reformatted {plural(s.hook_fixes.length, "file")}, and those changes are part of the merge commit:
             <ul className="file-list">{s.hook_fixes.map((p) => <li key={p} className="mono">{p}</li>)}</ul>
           </div>
         )}
-        {s.pushed ? (
-          <p className="small"><span className="pill ok">Pushed</span> {s.head_ref} is on GitHub with the merge.</p>
-        ) : (
+        {!s.pushed && (
           <>
-            <p className="muted small">
-              It isn't on GitHub yet. Push it now, or leave it: Respond pushes the branch together with your replies.
-            </p>
+            <p className="muted small">It isn't on GitHub yet. Push it now, or leave it: Respond pushes the branch together with your replies.</p>
             {behindGitHub ? (
               <GitHubCommits prRef={prRef} branch={s.head_ref} r={remote.data!} action="Bring them in, then push"
                 onSynced={() => { push.reset(); push.mutate(); }} />
             ) : !confirming ? (
-              <div className="row-wrap"><button className="btn" onClick={() => setConfirming(true)}>Push to GitHub…</button></div>
+              <div className="row-wrap"><button className="btn primary" onClick={() => setConfirming(true)}>Push to GitHub…</button></div>
             ) : (
               <div className="info-bar">
                 <span className="grow small">Push {s.head_ref} to origin? Reviewers will see the merge commit. This only succeeds if nobody else pushed to the branch meanwhile.</span>
@@ -885,11 +886,7 @@ function MergeDone({ prRef, s }: { prRef: PRRef; s: MergeSession }) {
             {push.error && !(rejected && behindGitHub) && <p className="error small">{(push.error as Error).message}</p>}
           </>
         )}
-        <div className="row-wrap">
-          <a className="btn" href={prHref(prRef)}>Back to Overview</a>
-          <button className="link small" onClick={() => again.mutate()} disabled={again.isPending}>Check {s.base_ref} for newer commits</button>
-        </div>
-      </section>
+      </ResultCard>
     </main>
   );
 }

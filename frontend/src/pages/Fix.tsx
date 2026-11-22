@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import type { PRContext } from "../App";
 import { api, type Thread, type WorkItem } from "../api";
 import { CheckoutPath } from "../components/CheckoutPath";
+import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { GitHubLink } from "../components/Brand";
 import { ChecksPanel } from "../components/ChecksPanel";
 import { ProposedFix } from "../components/ProposedFix";
@@ -180,7 +181,7 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
           </>
         )}
         {item.status === "committed" && (
-          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p><EditConflicts files={item.edit_conflicts} /></div>
+          <CommittedCard ctx={ctx} item={item} />
         )}
         {(item.status === "ready" || item.status === "committed") && item.patch && (
           <div className="card flush">
@@ -227,6 +228,30 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
         </aside>
       )}
     </div>
+  );
+}
+
+/** The confirmation for a committed work item. */
+function CommittedCard({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
+  const { pr, state } = ctx.data!;
+  const checkout = useCheckoutDetails(pr.ref);
+  const work = useQuery({ queryKey: ["work", pr.ref.number], queryFn: () => api.work(pr.ref) });
+  const pushed = work.data?.ahead === 0;
+  const next = state.plan.find((w) => w.id !== item.id && w.status !== "committed");
+  return (
+    <ResultCard
+      prRef={pr.ref}
+      title="Committed"
+      status={pushed ? "Pushed" : "Not pushed"}
+      tone={pushed ? "ok" : "warn"}
+      summary={pushed
+        ? <>Work item {item.id} is committed and on GitHub.</>
+        : <>Work item {item.id} is committed on your branch. Respond pushes it, together with your replies.</>}
+      details={[...checkout, { label: "Commit", value: item.commit_sha }]}
+      actions={next && <a className="btn primary" href={prHref(pr.ref, "fix", String(next.id))}>Next: work item {next.id}</a>}
+    >
+      <EditConflicts files={item.edit_conflicts} />
+    </ResultCard>
   );
 }
 
@@ -335,7 +360,7 @@ function OwnItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
       <ThreadChecks ctx={ctx} item={item} subtitle="Use “Check against threads” after you make changes." />
       <section className="stack min0">
         {item.status === "committed" ? (
-          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p><EditConflicts files={item.edit_conflicts} /></div>
+          <CommittedCard ctx={ctx} item={item} />
         ) : (
           <>
             {fix && (

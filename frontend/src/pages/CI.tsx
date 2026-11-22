@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { PRContext } from "../App";
 import { api, type CICategory, type CIFailure, type CISession, type PRRef } from "../api";
 import { CheckoutPath } from "../components/CheckoutPath";
+import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { BrandIcon, GitHubLink } from "../components/Brand";
 import { Inline } from "../components/Inline";
 import { KeyHelp } from "../components/KeyHelp";
@@ -391,6 +392,7 @@ function CIFinish({ prRef, s, branch }: { prRef: PRRef; s: CISession; branch: st
   const open = all.filter((f) => !done(f));
   const commits = all.filter((f) => f.commit_sha);
   const [confirming, setConfirming] = useState(false);
+  const checkout = useCheckoutDetails(prRef);
   const remote = useQuery({ queryKey: ["mergeRemote", prRef.number], queryFn: () => api.mergeRemote(prRef) });
   const behindGitHub = (remote.data?.behind ?? 0) > 0;
   const push = useMutation({
@@ -399,6 +401,15 @@ function CIFinish({ prRef, s, branch }: { prRef: PRRef; s: CISession; branch: st
   });
   return (
     <main className="page narrow">
+      {s.pushed && (
+        <ResultCard
+          prRef={prRef}
+          title="Fixes pushed"
+          status="Pushed"
+          summary={<>{plural(commits.length, "fix commit")} {commits.length === 1 ? "is" : "are"} on GitHub, and CI runs again there.</>}
+          details={[...checkout, ...commits.map((f) => ({ label: `Commit (${f.name})`, value: f.commit_sha }))]}
+        />
+      )}
       <section className="card stack-gap">
         <div className="row-between"><h1>Finish</h1><DiscardCI prRef={prRef} /></div>
         {open.length > 0 && (
@@ -421,7 +432,7 @@ function CIFinish({ prRef, s, branch }: { prRef: PRRef; s: CISession; branch: st
       <section className="card stack-gap">
         <h2>Push the fixes</h2>
         {s.pushed ? (
-          <p className="small"><span className="pill ok">Pushed</span> CI runs again on GitHub. Check back on the Start step, or on GitHub.</p>
+          <p className="small">Pushed. See the confirmation above.</p>
         ) : commits.length === 0 ? (
           <p className="muted small">
             No fixes were committed here, so there's nothing to push.

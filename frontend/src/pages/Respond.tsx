@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PRContext } from "../App";
 import { api, type Thread } from "../api";
+import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { decisionLabel, excerpt, threadTitle, where } from "../lib";
 
 export function Respond({ ctx }: { ctx: PRContext }) {
@@ -29,6 +30,7 @@ export function Respond({ ctx }: { ctx: PRContext }) {
   const saveSummary = () => { if (summary !== undefined && summary !== sub.data?.summary) api.setSummary(pr.ref, summary).then(ctx.setState); };
 
   const s = sub.data;
+  const checkout = useCheckoutDetails(pr.ref);
   const resolveCount = s?.replies.filter((r) => r.resolve).length ?? 0;
 
   return (
@@ -45,7 +47,21 @@ export function Respond({ ctx }: { ctx: PRContext }) {
         )}
       </div>
       {draft.error && <div className="banner error">{(draft.error as Error).message}</div>}
-      {state.submitted_at && <div className="banner">Submitted {new Date(state.submitted_at).toLocaleString()}.</div>}
+      {state.submitted_at && (
+        <ResultCard
+          prRef={pr.ref}
+          title="Review submitted"
+          status="Posted"
+          summary={submit.data
+            ? <>{submit.data.done.map((d) => d.replace(/:\s*https?:\S+$/, "")).join(". ")}.</>
+            : <>Your replies were posted on {new Date(state.submitted_at).toLocaleString()}.</>}
+          details={[
+            { label: "Pull request", value: pr.url },
+            { label: "Review", value: submit.data?.done.map((d) => d.match(/https?:\S+/)?.[0]).find(Boolean) },
+            ...checkout,
+          ]}
+        />
+      )}
 
       <section className="card stack-gap">
         <div className="row-between">

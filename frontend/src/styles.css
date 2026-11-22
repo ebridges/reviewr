@@ -456,3 +456,13 @@ textarea.input { resize: vertical; }
 /* Brand icons (public/brands) */
 .brand-icon { display: inline-block; flex: none; vertical-align: -2px; object-fit: contain; }
 .with-icon { display: inline-flex; align-items: center; gap: 5px; }
+@media (prefers-color-scheme: dark) { .brand-github { filter: invert(1); } }
+
+/* Result screens */
+.result-card h1 { margin: 0; }
+.status-pill { font-size: 13px; padding: 3px 12px; font-weight: 600; }
+.pill.info { background: var(--accent-soft); border-color: var(--accent-soft-border); color: var(--accent); }
+.details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; align-items: center; margin: 0; }
+.details dd { margin: 0; min-width: 0; }
+.details .copy-field { width: 100%; }
+@media (max-width: 600px) { .details { grid-template-columns: minmax(0, 1fr); } }
