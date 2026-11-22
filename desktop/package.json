@@ -2,7 +2,7 @@
   "name": "reviewr-desktop",
   "productName": "reviewr",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "reviewr as a desktop app",
   "main": "main.cjs",
   "scripts": {
@@ -28,14 +28,33 @@
       "build/icon.png"
     ],
     "extraResources": [
-      { "from": "../backend/dist/reviewr", "to": "backend/reviewr" },
-      { "from": "../frontend/dist", "to": "ui" },
-      { "from": "../bin/reviewr", "to": "bin/reviewr" }
+      {
+        "from": "../backend/dist/reviewr",
+        "to": "backend/reviewr"
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "ui"
+      },
+      {
+        "from": "../bin/reviewr",
+        "to": "bin/reviewr"
+      }
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "zip", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.developer-tools",
       "identity": null,
