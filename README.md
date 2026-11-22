@@ -125,7 +125,7 @@ ln -s /Applications/reviewr.app/Contents/Resources/bin/reviewr ~/.local/bin/revi
 
 ## Running from source
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 20+, the `gh` CLI
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 22+, the `gh` CLI
 logged in, Claude Code installed (the Agent SDK uses it), and a local clone of each
 repo you review.
 
