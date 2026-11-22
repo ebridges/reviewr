@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import type { PRContext } from "../App";
 import {
@@ -10,6 +10,7 @@ import { DiffView } from "../components/Code";
 import { Inline } from "../components/Inline";
 import { KeyHelp } from "../components/KeyHelp";
 import { ProposedFix, failedLabel, forWhat } from "../components/ProposedFix";
+import { Spinner } from "../components/Spinner";
 import { LineDiffView, diffStats, lineDiff, plainLines, type DLine } from "../components/LineDiff";
 import { prHref, useAIName } from "../lib";
 
@@ -328,7 +329,7 @@ function ConflictTriage({ prRef, view }: { prRef: PRRef; view: MergeView }) {
               )}
             </div>
             <p className="muted small pad-x">{g.help}</p>
-            {g.items.map((c) => <TriageRow key={c.id} prRef={prRef} c={c} base={s.base_ref} ai={ai} />)}
+            {g.items.map((c) => <TriageRow key={c.id} prRef={prRef} c={c} base={s.base_ref} ai={ai} analyzing={s.status === "analyzing"} />)}
           </section>
         );
       })}
@@ -348,7 +349,15 @@ function ConflictTriage({ prRef, view }: { prRef: PRRef; view: MergeView }) {
   );
 }
 
-function TriageRow({ prRef, c, base, ai }: { prRef: PRRef; c: Conflict; base: string; ai: string }) {
+/** The row's status mark: a spinner while the AI works on this conflict (triaging it,
+ *  or writing a proposal), otherwise ✓ once it's resolved. */
+function ConflictMark({ prRef, c, analyzing }: { prRef: PRRef; c: Conflict; analyzing: boolean }) {
+  const proposing = useIsMutating({ mutationKey: ["propose", prRef.number, c.id] }) > 0;
+  if (proposing || (analyzing && !c.category)) return <Spinner label={proposing ? "Writing a proposal" : "Triaging"} />;
+  return <span aria-hidden="true">{c.resolved ? "✓" : ""}</span>;
+}
+
+function TriageRow({ prRef, c, base, ai, analyzing = false }: { prRef: PRRef; c: Conflict; base: string; ai: string; analyzing?: boolean }) {
   const setView = useSetView(prRef);
   const [preview, setPreview] = useState(false);
   const recat = useMutation({ mutationFn: (category: ConflictCategory) => api.mergePatch(prRef, c.id, { category }), onSuccess: setView });
@@ -356,9 +365,11 @@ function TriageRow({ prRef, c, base, ai }: { prRef: PRRef; c: Conflict; base: st
   return (
     <div className="list-row-wrap">
       <div className="list-row">
-        <span className="mark" aria-hidden="true">{c.resolved ? "✓" : ""}</span>
+        <span className="mark"><ConflictMark prRef={prRef} c={c} analyzing={analyzing} /></span>
         <span className="grow min0">
-          <a href={prHref(prRef, "merge", `resolve/${encodeURIComponent(c.id)}`)} className="block truncate">{c.title || "Conflict"}</a>
+          <a href={prHref(prRef, "merge", `resolve/${encodeURIComponent(c.id)}`)} className="block truncate">
+            {c.title || "Conflict"}
+          </a>
           <span className="mono muted tiny">{where(c)}</span>
           {shown && (
             <span className="muted tiny"> · {c.resolved ? "Resolved: " : "Suggested: "}{optionLabel(shown, c, base, c.ai_name ?? ai)}</span>
@@ -415,7 +426,7 @@ function Resolve({ prRef, view, id }: { prRef: PRRef; view: MergeView; id?: stri
               <div className="queue-group"><span className={`cat-dot cat-${k ?? "none"}`} />{k ? CATEGORY_LABEL[k] : "Not triaged yet"} · {rows.length}</div>
               {rows.map((c) => (
                 <button key={c.id} className={`qrow ${c.id === selected.id ? "sel" : ""}`} onClick={() => go(c)}>
-                  <span className="mark" aria-hidden="true">{c.resolved ? "✓" : ""}</span>
+                  <span className="mark"><ConflictMark prRef={prRef} c={c} analyzing={s.status === "analyzing"} /></span>
                   <span className="grow min0">
                     <span className="truncate block">{c.title || "Conflict"}</span>
                     <span className="mono muted tiny">{where(c)}</span>
@@ -464,6 +475,7 @@ function ConflictCard({ prRef, s, c, options, onNav, onDone }: {
   });
   const reopen = useMutation({ mutationFn: () => api.mergePatch(prRef, c.id, { resolved: false }), onSuccess: setView });
   const propose = useMutation({
+    mutationKey: ["propose", prRef.number, c.id],
     mutationFn: () => api.mergePropose(prRef, c.id, instruction),
     onSuccess: (v) => { setView(v); setPick("proposal"); },
   });

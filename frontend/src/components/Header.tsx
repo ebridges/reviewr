@@ -5,6 +5,7 @@ import { ciSteps, useCIStatus } from "../pages/CI";
 import { mergeStatus, mergeSteps, useBranchStatus, type WorkflowStep } from "../pages/Merge";
 import { AISwitch } from "./AISwitch";
 import { BrandIcon } from "./Brand";
+import { WorkingBar } from "./WorkingBar";
 import { WorkspaceMenu } from "./WorkspacePanel";
 
 export const STEPS = [
@@ -48,6 +49,7 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
           </svg>
         </a>
       )}
+      {view && <WorkingBar view={view} />}
     </header>
   );
 }

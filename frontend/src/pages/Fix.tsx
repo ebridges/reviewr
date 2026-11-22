@@ -6,6 +6,7 @@ import { CheckoutPath } from "../components/CheckoutPath";
 import { GitHubLink } from "../components/Brand";
 import { ChecksPanel } from "../components/ChecksPanel";
 import { ProposedFix } from "../components/ProposedFix";
+import { Spinner } from "../components/Spinner";
 import { DiffView } from "../components/Code";
 import { Markdown } from "../components/Markdown";
 import { prHref, storageGet, threadTitle, where } from "../lib";
@@ -37,6 +38,7 @@ export function Fix({ ctx, arg }: { ctx: PRContext; arg?: string }) {
             <a key={w.id} href={href(w)} title={w.title} className={`strip-item ${w.id === item.id ? "on" : ""}`}
               aria-current={w.id === item.id ? "page" : undefined}>
               <strong>{w.id}</strong> <span className="muted">{itemStatus(w).toLowerCase()}</span>
+              {(w.status === "drafting" || w.checks_running || w.proposed_fix?.status === "running") && <Spinner label="Agent working" />}
             </a>
           ))}
         </div>

@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { PRContext } from "../App";
+import { Spinner } from "../components/Spinner";
 import { BrandIcon } from "../components/Brand";
 import { api, type Decision, type WorkItem } from "../api";
 import { decisionLabel, prHref, threadTitle, useAIName, where } from "../lib";
@@ -165,7 +166,10 @@ function WorkItems({ ctx, fixes }: { ctx: PRContext; fixes: number }) {
                   </button>
                 </div>
               </div>
-              <span className={`pill ${w.status === "committed" ? "ok" : w.status === "failed" ? "warn" : ""}`}>{itemStatus(w)}</span>
+              <span className={`pill ${w.status === "committed" ? "ok" : w.status === "failed" ? "warn" : ""}`}>
+                {(w.status === "drafting" || w.checks_running || w.proposed_fix?.status === "running") && <><Spinner label="Agent working" />&nbsp;</>}
+                {itemStatus(w)}
+              </span>
               <div className="seg" role="group" aria-label="Who does this item">
                 <button className={w.mode === "agent" ? "on" : ""} disabled={w.status === "committed"} onClick={() => setMode(w.id, "agent")}>Agent drafts</button>
                 <button className={w.mode === "me" ? "on" : ""} disabled={w.status === "committed"} onClick={() => setMode(w.id, "me")}>I'll do it</button>

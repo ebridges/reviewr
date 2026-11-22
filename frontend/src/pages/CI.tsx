@@ -7,6 +7,7 @@ import { BrandIcon, GitHubLink } from "../components/Brand";
 import { Inline } from "../components/Inline";
 import { KeyHelp } from "../components/KeyHelp";
 import { ProposedFix } from "../components/ProposedFix";
+import { Spinner } from "../components/Spinner";
 import { prHref, useAIName } from "../lib";
 import { GitHubCommits, type WorkflowStep } from "./Merge";
 import { EditConflicts } from "../components/EditConflicts";
@@ -35,6 +36,8 @@ function ordered(s: CISession): CIFailure[] {
   return s.order.map((id) => s.failures[id]).filter(Boolean).sort((a, b) => rank(a) - rank(b));
 }
 const done = (f: CIFailure) => f.status !== "open";
+/** The agent is working on this failure: fixing it, or the whole set is being analyzed. */
+const busy = (f: CIFailure, s: CISession) => f.fix?.status === "running" || (s.status === "analyzing" && !f.category);
 
 function useSetSession(ref: PRRef) {
   const qc = useQueryClient();
@@ -182,7 +185,7 @@ function CITriage({ prRef, s }: { prRef: PRRef; s: CISession }) {
         <section key={g.key} className={`card flush conflict-group ci-${g.key}`}>
           <div className="list-head"><h2 className="grow">{g.label} · {g.items.length}</h2></div>
           <p className="muted small pad-x">{g.help}</p>
-          {g.items.map((f) => <TriageRow key={f.id} prRef={prRef} f={f} />)}
+          {g.items.map((f) => <TriageRow key={f.id} prRef={prRef} f={f} s={s} />)}
         </section>
       ))}
       <div className="row-wrap">
@@ -197,15 +200,17 @@ function CITriage({ prRef, s }: { prRef: PRRef; s: CISession }) {
   );
 }
 
-function TriageRow({ prRef, f }: { prRef: PRRef; f: CIFailure }) {
+function TriageRow({ prRef, f, s }: { prRef: PRRef; f: CIFailure; s: CISession }) {
   const setSession = useSetSession(prRef);
   const recat = useMutation({ mutationFn: (category: CICategory) => api.ciPatch(prRef, f.id, { category }), onSuccess: setSession });
   return (
     <div className="list-row-wrap">
       <div className="list-row">
-        <span className="mark" aria-hidden="true">{done(f) ? "✓" : ""}</span>
+        <span className="mark">{busy(f, s) ? <Spinner label="Agent working" /> : done(f) ? "✓" : ""}</span>
         <span className="grow min0">
-          <a href={prHref(prRef, "ci", `fix/${encodeURIComponent(f.id)}`)} className="block truncate">{f.title || f.name}</a>
+          <a href={prHref(prRef, "ci", `fix/${encodeURIComponent(f.id)}`)} className="block truncate">
+            {f.title || f.name}
+          </a>
           <span className="muted tiny">{f.name}{f.workflow && f.workflow !== f.name ? ` · ${f.workflow}` : ""}{done(f) ? ` · ${STATUS_LABEL[f.status]}` : ""}</span>
           {f.reason && <span className="muted tiny block"><Inline text={f.reason} /></span>}
         </span>
@@ -247,7 +252,7 @@ function CIFix({ prRef, s, id }: { prRef: PRRef; s: CISession; id?: string }) {
               <div className="queue-group"><span className={`cat-dot ci-${k ?? "none"}`} />{k ? CATEGORY_LABEL[k] : "Not triaged yet"} · {rows.length}</div>
               {rows.map((f) => (
                 <button key={f.id} className={`qrow ${f.id === selected.id ? "sel" : ""}`} onClick={() => go(f)}>
-                  <span className="mark" aria-hidden="true">{done(f) ? "✓" : ""}</span>
+                  <span className="mark">{busy(f, s) ? <Spinner label="Agent working" /> : done(f) ? "✓" : ""}</span>
                   <span className="grow min0">
                     <span className="truncate block">{f.title || f.name}</span>
                     <span className="muted tiny">{f.name}</span>
