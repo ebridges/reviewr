@@ -84,7 +84,6 @@ export function Overview({ ctx }: { ctx: PRContext }) {
             <button className="link" onClick={() => ctx.refresh()}>Refresh</button>
           </p>
         </div>
-        <a className="btn primary" href={prHref(pr.ref, "triage")}>Start triage</a>
       </div>
 
       <div className="cols">
