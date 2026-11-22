@@ -261,6 +261,11 @@ def _draft_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: P
 def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, message: str) -> ReviewState:
     work = work_worktree(cfg, pr)
     item = store.get_state(pr.ref).item(item_id)
+    if item.status == "ready" and not item.patch.strip():
+        raise ValueError(
+            "The agent made no changes for this item, so there's nothing to commit. If the code already does what the "
+            "comment asks, mark it Already done; otherwise add to the prompt and redraft."
+        )
     if item.status != "ready" or not item.patch:
         raise ValueError("This work item has no drafted patch to accept.")
     sha, _, conflicts = apply_patch_and_commit(cfg, pr, work, item.patch, message)

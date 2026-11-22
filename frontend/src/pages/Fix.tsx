@@ -183,6 +183,14 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
         {item.status === "committed" && (
           <CommittedCard ctx={ctx} item={item} />
         )}
+        {item.status === "ready" && !item.patch.trim() && (
+          <>
+            <NoChangeCard ctx={ctx} item={item} />
+            <ReviewThreads ctx={ctx} item={item} collapsed />
+            <PromptCard {...promptProps} heading="Disagree? Redraft with more to go on" action="Redraft with this prompt"
+              note="Add what the agent missed (at the end is fine) and redraft." />
+          </>
+        )}
         {(item.status === "ready" || item.status === "committed") && item.patch && (
           <div className="card flush">
             <div className="card-head">
@@ -192,7 +200,7 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
             <DiffView text={item.patch} />
           </div>
         )}
-        {item.status === "ready" && (
+        {item.status === "ready" && item.patch.trim() !== "" && (
           <>
             {item.agent_log && (
               <details className="card">
@@ -252,6 +260,35 @@ function CommittedCard({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
     >
       <EditConflicts files={item.edit_conflicts} />
     </ResultCard>
+  );
+}
+
+/** A draft that came back with no changes: usually the code already does what the
+ *  comment asks. Mark the threads Already done instead of committing nothing. */
+function NoChangeCard({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
+  const { pr } = ctx.data!;
+  const done = useMutation({
+    mutationFn: () => api.itemAlreadyDone(pr.ref, item.id),
+    onSuccess: (st) => { ctx.setState(st); location.hash = prHref(pr.ref, "fix"); },
+  });
+  const n = item.thread_ids.length;
+  return (
+    <section className="card stack-gap">
+      <h2 className="h3">The agent didn't change anything</h2>
+      {item.agent_log ? (
+        <div className="suggest small"><strong>What it found</strong><Markdown text={item.agent_log} /></div>
+      ) : (
+        <p className="small">It finished without changing any files.</p>
+      )}
+      <p className="muted small">
+        If it's right, the comment is already addressed. Mark {n === 1 ? "the thread" : `the ${n} threads`} Already done: this work item
+        goes away, and in Respond the thread is resolved with your reply. If it's wrong, add to the prompt below and redraft.
+      </p>
+      <div className="row-wrap">
+        <button className="btn primary" onClick={() => done.mutate()} disabled={done.isPending}>Mark as Already done</button>
+      </div>
+      {done.error && <p className="error small">{(done.error as Error).message}</p>}
+    </section>
   );
 }
 

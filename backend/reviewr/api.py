@@ -313,6 +313,29 @@ def get_item_prompt(owner: str, repo: str, number: int, item_id: int) -> dict:
     return {"prompt": item.prompt or default, "default": default, "edited": item.prompt is not None}
 
 
+@app.post(PR + "/plan/{item_id}/already-done")
+def post_item_already_done(owner: str, repo: str, number: int, item_id: int) -> ReviewState:
+    """For a work item the agent found nothing to change in: mark its threads Already
+    done (keeping your note and reply) and drop the item from the plan."""
+    def save(s: ReviewState) -> None:
+        item = s.item(item_id)
+        if item.status == "committed":
+            raise ValueError("This work item is already committed.")
+        now = datetime.now(UTC)
+        for tid in item.thread_ids:
+            prev = s.decisions.get(tid)
+            s.decisions[tid] = ThreadDecision(
+                decision="already_done", note=prev.note if prev else "", reply=prev.reply if prev else "",
+                resolve=True, decided_at=now,
+            )
+        s.plan = [w for w in s.plan if w.id != item_id]
+
+    try:
+        return store().update_state(_ref(owner, repo, number), save)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @app.post(PR + "/plan/draft-all")
 def post_draft_all(owner: str, repo: str, number: int) -> ReviewState:
     """Start background drafts for every agent item that doesn't have one yet."""

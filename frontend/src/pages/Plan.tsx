@@ -16,6 +16,7 @@ export const STATUS_LABEL: Record<WorkItem["status"], string> = {
 
 export function itemStatus(w: WorkItem) {
   if (w.mode === "me" && w.status !== "committed") return "Yours";
+  if (w.status === "ready" && !w.patch.trim()) return "No changes";
   return STATUS_LABEL[w.status];
 }
 

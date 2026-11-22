@@ -387,6 +387,7 @@ export const api = {
   itemPrompt: (r: PRRef, id: number) => call<{ prompt: string; default: string; edited: boolean }>(`${base(r)}/plan/${id}/prompt`),
   patchItem: (r: PRRef, id: number, patch: { mode?: string; title?: string; instruction?: string; prompt?: string; reset_prompt?: boolean }) =>
     call<ReviewState>(`${base(r)}/plan/${id}`, send("PATCH", patch)),
+  itemAlreadyDone: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/already-done`, send("POST")),
   draftAll: (r: PRRef) => call<ReviewState>(`${base(r)}/plan/draft-all`, send("POST")),
   draft: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/draft`, send("POST")),
   accept: (r: PRRef, id: number, message: string) =>
