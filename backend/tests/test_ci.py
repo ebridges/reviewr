@@ -112,6 +112,10 @@ def _quote_patch(clone):
     (clone / "app.py").write_text(original.replace("'", '"'))
     diff = sh(clone, "diff")
     (clone / "app.py").write_text(original)
+    # The file is back to its committed content but has a new mtime. Refresh the index so
+    # git sees it as unchanged; otherwise `git apply --index` can refuse it as modified,
+    # depending on timestamp resolution (it failed this way on the Linux CI runner).
+    sh(clone, "status", "--porcelain")
     return diff
 
 
