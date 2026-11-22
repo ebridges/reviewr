@@ -314,12 +314,12 @@ def sync_with_remote(cfg: Config, pr: PullRequest) -> dict:
         status["fetch_error"] = fetch_error
         if status["behind"] == 0:
             return status
+        work = fixwork.work_worktree(cfg, pr)
         if status["conflicted_files"]:
             raise MergeError(
                 f"GitHub's {pr.head_ref} and yours would conflict in: {', '.join(status['conflicted_files'])}. "
-                "Merge them in your checkout (git pull) and resolve those by hand."
+                f"Merge them in your checkout and resolve those by hand: git -C {work} pull"
             )
-        work = fixwork.work_worktree(cfg, pr)
         remote = f"origin/{pr.head_ref}"
         if status["ahead"] == 0:
             args = ["merge", "--ff-only", remote]
@@ -708,7 +708,7 @@ def commit(cfg: Config, pr: PullRequest, message: str) -> MergeSession:
         ff = git._git(work, "merge", "--ff-only", sha, check=False)
         if ff.returncode != 0:
             raise MergeError(
-                "The merge is committed but your checkout couldn't be moved to it: "
+                f"The merge is committed but your checkout at {work} couldn't be moved to it: "
                 + (ff.stderr or ff.stdout).strip()
                 + f"\nCommit or stash those changes and try again, or run: git -C {work} merge --ff-only {sha[:12]}"
             )

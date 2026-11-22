@@ -139,7 +139,7 @@ def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, path
                 proc = attempt()
         if proc.returncode != 0:
             raise git.GitError(
-                "Your repository's commit hooks failed, so nothing was committed. Fix what they report, then try again.\n\n"
+                f"Your repository's commit hooks failed, so nothing was committed in {worktree}. Fix what they report, then try again.\n\n"
                 + (proc.stdout + proc.stderr).strip()[-4000:]
             )
         return git.head_sha(worktree), fixed
@@ -179,7 +179,14 @@ def work_status(cfg: Config, pr: PullRequest) -> dict:
     path = existing_work_tree(cfg, pr)
     if path is None:
         return {"path": None, "branch": pr.head_ref, "created_by_reviewr": False}
-    ahead, behind = git.ahead_behind(path, pr.head_oid)
+    # Compare with GitHub's copy of the branch as last fetched (origin/<branch>), which
+    # moves with every fetch and push; the PR head reviewr cached can be out of date.
+    # Counted along the branch's own line, so a merge of main counts once.
+    remote = f"origin/{pr.head_ref}"
+    has_remote = git._git(path, "rev-parse", "--verify", "--quiet", remote, check=False).returncode == 0
+    base = remote if has_remote else pr.head_oid
+    ahead = git.commits_ahead(path, base)
+    behind = int(git._git(path, "rev-list", "--count", f"HEAD..{base}", check=False).stdout.strip() or 0)
     changed = git.patch_paths(git.working_diff(path, exclude=_excluded(cfg, pr)))
     return {
         "path": str(path),
