@@ -342,7 +342,7 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
         {f.excerpt ? <pre className="code log"><div className="meta pre-wrap">{f.excerpt}</div></pre> : <p className="muted small">No log yet.</p>}
       </div>
 
-      {f.fix && (
+      {f.fix && f.status === "open" && (
         <ProposedFix
           fix={f.fix} where="the code" onWhat="on your branch" applyLabel="Apply and commit"
           applyNote="Applying commits them to your checkout of the branch (only these files; it refuses if you have uncommitted edits in them). Push from Finish."

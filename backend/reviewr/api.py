@@ -905,6 +905,9 @@ def patch_ci_failure(owner: str, repo: str, number: int, failure_id: str, req: F
             f.category = req.category
         if req.status:
             f.status = req.status
+            # A failure that's fixed or dismissed has nothing left to apply.
+            if req.status in ("fixed", "dismissed") and f.fix and f.fix.status != "running":
+                f.fix = None
 
     return CIView(session=_ci_call(ci.update, cfg, pr, change))
 
