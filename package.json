@@ -1,6 +1,6 @@
 {
   "name": "reviewr",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Review and respond to comments on very large pull requests",
   "scripts": {
