@@ -1,4 +1,4 @@
-/** Small colored marks for the two AI providers. Drawn for reviewr, not the vendors' logos. */
+/** Marks for the two AI providers: a drawn spark for Claude, OpenAI's favicon for Codex. */
 
 /** Claude: an orange eight-point spark. */
 export function ClaudeIcon({ size = 16 }: { size?: number }) {
@@ -22,22 +22,9 @@ export function ClaudeIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Codex: a green-to-blue tile with a terminal prompt. */
+/** Codex: OpenAI's favicon. */
 export function CodexIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      <defs>
-        <linearGradient id="codex-g" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#22C55E" />
-          <stop offset="0.55" stopColor="#14B8A6" />
-          <stop offset="1" stopColor="#3B82F6" />
-        </linearGradient>
-      </defs>
-      <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="url(#codex-g)" />
-      <path d="M7 8.5l3.5 3.5L7 15.5" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12.5 15.5h4.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-    </svg>
-  );
+  return <img src="/brands/openai.svg" alt="" width={size} height={size} aria-hidden="true" style={{ display: "block" }} />;
 }
 
 export function ProviderIcon({ provider, size }: { provider: "claude" | "codex"; size?: number }) {

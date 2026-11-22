@@ -3,6 +3,8 @@ import { useState } from "react";
 import type { PRRef } from "../api";
 import { api } from "../api";
 import { storageGet } from "../lib";
+import { CopyField } from "./CopyField";
+import { OpenInEditor } from "./Brand";
 
 /** Where the PR branch is checked out: the one place your edits, reviewr's commits and
  *  the final push all happen. */
@@ -29,7 +31,7 @@ export function WorkPanel({ prRef, bare = false }: { prRef: PRRef; bare?: boolea
         <strong className="small">Working in</strong>
         {w.path ? (
           <>
-            <span className="mono small">{w.path}</span>
+            <CopyField value={w.path} label="Checkout path" />
             <span className="pill">{w.branch ?? "detached at the PR head"}</span>
             {!w.branch && <span className="muted tiny">Commits made here are pushed to {w.expected_branch}.</span>}
             {w.created_by_reviewr && <span className="muted tiny">(created by reviewr; you had no checkout of this branch)</span>}
@@ -38,7 +40,7 @@ export function WorkPanel({ prRef, bare = false }: { prRef: PRRef; bare?: boolea
           <span className="muted small">No checkout of <span className="mono">{w.branch}</span> yet. Opening it creates one.</span>
         )}
         <span className="grow" />
-        <button className="btn sm" onClick={open}>Open in {editor}</button>
+        <OpenInEditor editor={editor} onClick={open} className="btn sm" />
       </div>
       {w.path && (
         <div className="muted tiny">
@@ -60,3 +62,4 @@ export function WorkPanel({ prRef, bare = false }: { prRef: PRRef; bare?: boolea
     </section>
   );
 }
+

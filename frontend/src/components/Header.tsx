@@ -4,6 +4,7 @@ import { prHref, type Route } from "../lib";
 import { ciSteps, useCIStatus } from "../pages/CI";
 import { mergeStatus, mergeSteps, useBranchStatus, type WorkflowStep } from "../pages/Merge";
 import { AISwitch } from "./AISwitch";
+import { BrandIcon } from "./Brand";
 import { WorkspaceMenu } from "./WorkspacePanel";
 
 export const STEPS = [
@@ -30,7 +31,8 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
       <a className="logo" href="#/"><img src="/icon.svg" alt="" />reviewr</a>
       {route.page !== "prs" && <a href="#/" className="small">← All pull requests</a>}
       {pr && (
-        <a className="pr-title small" href={pr.url} target="_blank" rel="noreferrer" title={pr.title}>
+        <a className="pr-title small with-icon" href={pr.url} target="_blank" rel="noreferrer" title={`${pr.title} (on GitHub)`}>
+          <BrandIcon name="github" />
           #{pr.ref.number} · {pr.title}
         </a>
       )}

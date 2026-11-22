@@ -435,3 +435,18 @@ textarea.input { resize: vertical; }
 .setup-step.failed .setup-icon { border-color: var(--error); color: var(--error); }
 .pre-wrap { white-space: pre-wrap; }
 .min0 { min-width: 0; }
+
+.checkout-path { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.path-text { overflow-wrap: anywhere; }
+
+/* Read-only field with a copy button */
+.copy-field { display: inline-flex; align-items: stretch; max-width: 100%; min-width: 0; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); overflow: hidden; vertical-align: middle; }
+.copy-field-input { flex: 1 1 auto; min-width: 0; max-width: 100%; border: none; background: transparent; color: var(--fg); font-size: 12px; padding: 5px 8px; text-overflow: ellipsis; }
+.copy-field-input:focus { outline: none; }
+.copy-field:focus-within { border-color: var(--accent); }
+.copy-field-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; flex: none; border: none; border-left: 1px solid var(--border); background: var(--surface-2); color: var(--fg-muted); cursor: pointer; }
+.copy-field-btn:hover { color: var(--fg); background: var(--surface); }
+
+/* Brand icons (public/brands) */
+.brand-icon { display: inline-block; flex: none; vertical-align: -2px; object-fit: contain; }
+.with-icon { display: inline-flex; align-items: center; gap: 5px; }

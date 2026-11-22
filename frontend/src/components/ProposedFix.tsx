@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { DiffView } from "./Code";
 import { Markdown } from "./Markdown";
 
@@ -27,7 +28,7 @@ export function forWhat(fix: ProposedFixData): string {
 /** The agent's proposed change for failing checks: its explanation, the diff, and
  *  Apply / Discard. Shared by the Fix page and the merge's Finish page. */
 export function ProposedFix({
-  fix, where, onWhat, applyLabel, applyNote, onApply, onDiscard, onRetry, busy, error,
+  fix, where, onWhat, applyLabel, applyNote, onApply, onDiscard, onRetry, busy, error, target,
 }: {
   fix: ProposedFixData;
   where: string; // "the merged code", "your changes"
@@ -39,6 +40,7 @@ export function ProposedFix({
   onRetry: () => void;
   busy: boolean;
   error?: Error | null;
+  target?: ReactNode; // where applying writes, e.g. <CheckoutPath />
 }) {
   const files = new Set([...fix.diff.matchAll(/^diff --git a\/.+? b\/(.+)$/gm)].map((m) => m[1]));
   const n = files.size;
@@ -66,6 +68,7 @@ export function ProposedFix({
             <>
               <p className="muted small">Changes to {n} file{n === 1 ? "" : "s"} {onWhat}. {applyNote}</p>
               <DiffView text={fix.diff} maxLines={800} />
+              {target}
             </>
           ) : (
             <p className="small">{fix.ai_name} didn't change any files.</p>

@@ -4,6 +4,7 @@ import type { PRContext } from "../App";
 import {
   api, type Conflict, type RemoteStatus, type ConflictCategory, type ConflictOption, type MergeSession, type MergeView, type PRRef,
 } from "../api";
+import { CheckoutPath } from "../components/CheckoutPath";
 import { CheckRow } from "../components/ChecksPanel";
 import { DiffView } from "../components/Code";
 import { Inline } from "../components/Inline";
@@ -738,6 +739,7 @@ function Finish({ prRef, view }: { prRef: PRRef; view: MergeView }) {
           pushed yet. Your repository's commit hooks run as they would in your checkout; if they only reformat files, the
           formatting is kept and the commit goes ahead.
         </p>
+        <CheckoutPath prRef={prRef} label="Moves your checkout" />
         <input className="input" value={message} onChange={(e) => setMessage(e.target.value)} aria-label="Commit message" />
         <div className="row-wrap">
           <button className="btn primary" onClick={() => commit.mutate()} disabled={commit.isPending || open.length > 0 || busy || !!pendingFix}>

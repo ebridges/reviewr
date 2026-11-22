@@ -2,6 +2,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import type { PRContext } from "../App";
 import { api, type Thread, type WorkItem } from "../api";
+import { CheckoutPath } from "../components/CheckoutPath";
+import { GitHubLink } from "../components/Brand";
 import { ChecksPanel } from "../components/ChecksPanel";
 import { ProposedFix } from "../components/ProposedFix";
 import { DiffView } from "../components/Code";
@@ -84,7 +86,7 @@ function ThreadChecks({ ctx, item, subtitle }: { ctx: PRContext; item: WorkItem;
             <div className="min0">
               <div className="small">{threadTitle(t, state)}</div>
               {openable ? (
-                <button className="link mono tiny" title={`Open in ${editor}, in reviewr's worktree`} onClick={() => open(t.path, t.line ?? t.original_line)}>
+                <button className="link mono tiny" title={`Open in your editor (${editor})`} onClick={() => open(t.path, t.line ?? t.original_line)}>
                   {where(t)}
                 </button>
               ) : (
@@ -206,6 +208,7 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
               <button className="btn primary" onClick={() => accept.mutate()} disabled={accept.isPending || !message.trim() || item.checks_running}>Accept and commit</button>
               <span className="muted small">Commits locally on reviewr's branch. Pushed together with the replies in Respond.</span>
             </div>
+            <CheckoutPath prRef={pr.ref} label="Commits to your checkout" />
             {accept.error && <p className="error small">{(accept.error as Error).message}</p>}
             <ReviewThreads ctx={ctx} item={item} collapsed />
             <PromptCard {...promptProps} heading="Ask the agent to change it" action="Redraft with this prompt"
@@ -264,7 +267,7 @@ function ReviewThreads({ ctx, item, collapsed }: { ctx: PRContext; item: WorkIte
           <div key={t.id} className="review-thread stack-gap">
             <div className="row-wrap small">
               <strong className="grow">{threadTitle(t, state)}</strong>
-              <a href={t.comments[0]?.url} target="_blank" rel="noreferrer">View on GitHub</a>
+              <GitHubLink href={t.comments[0]?.url}>View on GitHub</GitHubLink>
             </div>
             <div className="mono muted tiny">{where(t)}</div>
             {code && <DiffView text={code} />}
@@ -340,6 +343,7 @@ function OwnItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
                 onApply={() => applyFix.mutate()} onDiscard={() => discardFix.mutate()} onRetry={() => retryFix.mutate()}
                 busy={applyFix.isPending || discardFix.isPending || retryFix.isPending}
                 error={(applyFix.error || discardFix.error || retryFix.error) as Error | null}
+                target={<CheckoutPath prRef={pr.ref} label="Writes to your checkout" />}
               />
             )}
             <ReviewThreads ctx={ctx} item={item} />
@@ -380,6 +384,7 @@ function OwnItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
               </button>
               <span className="muted small">Commits stay local until Respond.</span>
             </div>
+            <CheckoutPath prRef={pr.ref} label="Commits to your checkout" />
             {(check.error || commit.error) && <p className="error small">{((check.error || commit.error) as Error).message}</p>}
           </>
         )}

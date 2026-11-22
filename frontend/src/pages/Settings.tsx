@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { api, type ConfigData, type RepoConfigData, type SecretName, type Settings as SettingsData } from "../api";
 import { ProviderIcon } from "../components/AIIcons";
+import { BrandIcon } from "../components/Brand";
 import { StoragePanel } from "../components/StoragePanel";
 import { storageSet } from "../lib";
 
@@ -181,7 +182,7 @@ export function Settings() {
         <h2>Version control</h2>
         <section className="card stack-gap">
           <div className="row-between">
-            <h3 className="h3">GitHub</h3>
+            <h3 className="h3 h3-icon"><BrandIcon name="github" size={20} />GitHub</h3>
             <Status ok={!!d.github} text={d.github ? `Signed in via ${d.github}${d.github_login ? ` as ${d.github_login}` : ""}` : "Not signed in"} />
           </div>
           <p className="muted small">Lists your PRs, reads review threads, clones repositories, pushes commits and posts replies, with the GitHub CLI's login.</p>
@@ -194,7 +195,7 @@ export function Settings() {
         <h2>Issue tracking</h2>
         <section className="card stack-gap">
           <div className="row-between">
-            <h3 className="h3">Jira</h3>
+            <h3 className="h3 h3-icon"><BrandIcon name="atlassian" size={20} />Jira</h3>
             <Status ok={d.jira.configured ? !!d.jira.user : false}
               text={!d.jira.configured ? "Not set up" : d.jira.user ? `Signed in as ${d.jira.user}` : "Set up, can't connect"} />
           </div>

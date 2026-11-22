@@ -4,6 +4,7 @@ import type { PRContext } from "../App";
 import { api, type Decision, type ReviewState, type Thread } from "../api";
 import { Snippet, DiffView } from "../components/Code";
 import { Dot, FoldButton, useFolded } from "../components/Fold";
+import { GitHubLink, OpenInEditor } from "../components/Brand";
 import { KeyHelp } from "../components/KeyHelp";
 import { Markdown } from "../components/Markdown";
 import { DECISIONS, DECISION_HELP, GROUP_LABEL, decisionLabel, excerpt, prHref, storageGet, storageSet, threadTitle, useAIName, where } from "../lib";
@@ -205,8 +206,8 @@ function ThreadCard({ ctx, thread, onDone, onNav }: { ctx: PRContext; thread: Th
             <div className="muted small row-wrap grow">
               {thread.is_outdated && <span className="pill warn">Stale</span>}
               {reviewer} · <span className="mono">{where(thread)}</span> ·
-              <a href={thread.comments[0]?.url} target="_blank" rel="noreferrer">View on GitHub</a> ·
-              <button className="link" onClick={openEditor}>Open in {editor}</button>
+              <GitHubLink href={thread.comments[0]?.url}>View on GitHub</GitHubLink> ·
+              <OpenInEditor editor={editor} onClick={openEditor} className="link" />
             </div>
             <KeyHelp>
               <div><span className="kbd">F R P A D</span> decide</div>

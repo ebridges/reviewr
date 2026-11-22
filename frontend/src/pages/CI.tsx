@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PRContext } from "../App";
 import { api, type CICategory, type CIFailure, type CISession, type PRRef } from "../api";
+import { CheckoutPath } from "../components/CheckoutPath";
+import { BrandIcon, GitHubLink } from "../components/Brand";
 import { Inline } from "../components/Inline";
 import { KeyHelp } from "../components/KeyHelp";
 import { ProposedFix } from "../components/ProposedFix";
@@ -123,7 +125,7 @@ function CIStart({ prRef }: { prRef: PRRef }) {
                 <li key={f.id} className="small">
                   <strong>{f.name}</strong>{f.workflow && f.workflow !== f.name ? <span className="muted"> · {f.workflow}</span> : null}
                   <span className="muted"> · {f.conclusion.toLowerCase()}</span>{f.required && <span className="pill warn">Required</span>}
-                  {f.url && <> · <a href={f.url} target="_blank" rel="noreferrer">logs on GitHub</a></>}
+                  {f.url && <> · <GitHubLink href={f.url}>logs on GitHub</GitHubLink></>}
                 </li>
               ))}
             </ul>
@@ -299,7 +301,7 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
           {f.required && <span className="pill">Required</span>}
           {f.category && <span className={`pill cat-pill ci-${f.category}`}>{CATEGORY_LABEL[f.category]}</span>}
           {done(f) && <span className="pill ok">{STATUS_LABEL[f.status]}</span>}
-          {f.url && <a href={f.url} target="_blank" rel="noreferrer">Logs on GitHub</a>}
+          {f.url && <GitHubLink href={f.url}>Logs on GitHub</GitHubLink>}
         </div>
         <button className="btn sm" onClick={() => onNav(-1)} title="Previous (k)">←</button>
         <button className="btn sm" onClick={() => onNav(1)} title="Next (j)">→</button>
@@ -317,7 +319,7 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
 
       {f.annotations.length > 0 && (
         <div>
-          <h2 className="h3">GitHub's annotations</h2>
+          <h2 className="h3 h3-icon"><BrandIcon name="github" size={16} />GitHub's annotations</h2>
           <ul className="annotations">
             {f.annotations.map((a, i) => (
               <li key={i} className={a.level === "FAILURE" ? "error-text" : "muted"}>
@@ -340,6 +342,7 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
           applyNote="Applying commits them to your checkout of the branch (only these files; it refuses if you have uncommitted edits in them). Push from Finish."
           onApply={() => apply.mutate()} onDiscard={() => discard.mutate()} onRetry={() => retry.mutate()}
           busy={apply.isPending || discard.isPending || retry.isPending} error={(apply.error || discard.error || retry.error) as Error | null}
+          target={<CheckoutPath prRef={prRef} label="Commits to your checkout" />}
         />
       )}
 
@@ -422,6 +425,7 @@ function CIFinish({ prRef, s, branch }: { prRef: PRRef; s: CISession; branch: st
         ) : (
           <>
             <p className="small">{plural(commits.length, "fix commit")} on your checkout of <span className="mono">{branch}</span>. Pushing starts CI again on GitHub.</p>
+            <CheckoutPath prRef={prRef} />
             {behindGitHub && remote.data ? (
               <GitHubCommits prRef={prRef} branch={branch} r={remote.data} action="Bring them in, then push" onSynced={() => push.mutate()} />
             ) : !confirming ? (

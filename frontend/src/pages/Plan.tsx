@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { PRContext } from "../App";
+import { BrandIcon } from "../components/Brand";
 import { api, type Decision, type WorkItem } from "../api";
 import { decisionLabel, prHref, threadTitle, useAIName, where } from "../lib";
 
@@ -205,19 +206,20 @@ function JiraSection({ ctx }: { ctx: PRContext }) {
     <div className="stack-gap jira" style={{ marginTop: 8 }}>
       {state.jira_issues.map((i) => (
         <div key={i.key} className="small">
-          <a href={i.url} target="_blank" rel="noreferrer" className="mono">{i.key}</a>{" "}
+          <a href={i.url} target="_blank" rel="noreferrer" className="mono with-icon"><BrandIcon name="atlassian" />{i.key}</a>{" "}
           <span className="muted">· {i.thread_ids.length} deferred thread{i.thread_ids.length === 1 ? "" : "s"}</span>
         </div>
       ))}
       {deferred.length > 0 && (project ? (
         <button
-          className="btn sm"
+          className="btn sm with-icon"
           disabled={create.isPending}
           onClick={() => {
             if (confirm(`Create a ${project} issue in Jira listing ${deferred.length} deferred thread${deferred.length === 1 ? "" : "s"}?`)) create.mutate();
           }}
         >
-          {create.isPending ? "Creating…" : `Create a JIRA for ${deferred.length} deferred`}
+          <BrandIcon name="atlassian" />
+          {create.isPending ? "Creating…" : `Create a Jira issue for ${deferred.length} deferred`}
         </button>
       ) : (
         <p className="muted small">To file deferred threads in Jira, <a href="#/settings">set up Jira in Settings</a>.</p>
