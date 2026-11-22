@@ -31,8 +31,8 @@ const ROOT = path.resolve(__dirname, "..");
 const PACKAGED = app.isPackaged;
 const DEV = !PACKAGED && process.env.REVIEWR_DEV === "1";
 const CONFIG_DIR = path.join(os.homedir(), ".config", "reviewr");
-// Made from build/icon.svg; icon.icns is for packaging. Electron's default icon is used
-// when the file isn't there (build/ isn't in the repo).
+// Made from build/icon.svg by scripts/make-icons.sh; icon.icns is for packaging.
+// Electron's default icon is used if the file is missing.
 const ICON_FILE = path.join(__dirname, "build", "icon.png");
 const ICON = fs.existsSync(ICON_FILE) ? ICON_FILE : undefined;
 const SMOKE = process.env.REVIEWR_SMOKE;

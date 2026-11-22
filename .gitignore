@@ -12,3 +12,5 @@ dist/
 # Packaging output (scripts/package.sh).
 backend/build/
 desktop/release/
+# App icon files; overrides a global ignore of build/.
+!desktop/build/
