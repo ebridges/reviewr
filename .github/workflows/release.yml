@@ -18,8 +18,9 @@ concurrency:
 
 jobs:
   release:
-    # Apple Silicon; the app is built for arm64 only.
-    runs-on: macos-14
+    # Apple Silicon; the app is built for arm64 only. A numbered image (macos-14) stops
+    # working when GitHub retires it, so use the alias.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:

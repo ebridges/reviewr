@@ -29,8 +29,9 @@ const PY_INIT_VERSION = /^__version__ = "([^"]+)"/m;
 
 const read = (f) => readFileSync(path.join(ROOT, f), "utf8");
 const write = (f, text) => writeFileSync(path.join(ROOT, f), text);
+// Returns stdout, trimmed; "" when stdout goes to the terminal (stdio: "inherit").
 const run = (cmd, args, opts = {}) =>
-  execFileSync(cmd, args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...opts }).trim();
+  (execFileSync(cmd, args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...opts }) ?? "").trim();
 
 function fail(message) {
   console.error(`release: ${message}`);
