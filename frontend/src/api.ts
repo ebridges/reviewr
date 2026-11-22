@@ -190,7 +190,7 @@ export type SecretName = "anthropic_api_key" | "jira_api_token";
 export interface Settings {
   config: ConfigData;
   secrets: Record<SecretName, boolean>;
-  claude: { method: "ant" | "api_key"; ready: boolean; detail: string; ant_installed: boolean; login_running: boolean };
+  claude: { method: "ant" | "api_key"; ready: boolean; detail: string; ant_installed: boolean; ant_profiles: string[]; login_running: boolean };
   codex: { installed: boolean; status: string | null };
   github: string | null;
   github_login: string | null;
