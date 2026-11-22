@@ -358,13 +358,21 @@ def post_draft(owner: str, repo: str, number: int, item_id: int) -> ReviewState:
 class CommitRequest(BaseModel):
     message: str
     paths: list[str] | None = None  # your own items: the files to include
+    allow_conflicts: bool = False  # commit even if your edits would conflict with it
+
+
+def _edits_conflict(e: git.EditsWouldConflict) -> HTTPException:
+    """409 with what the page needs to ask: commit anyway, or stop and commit or stash."""
+    return HTTPException(409, {"code": "edits_conflict", "message": str(e), "worktree": str(e.worktree), "files": e.files})
 
 
 @app.post(PR + "/plan/{item_id}/accept")
 def post_accept(owner: str, repo: str, number: int, item_id: int, req: CommitRequest) -> ReviewState:
     ref = _ref(owner, repo, number)
     try:
-        return fixwork.accept_patch(store(), load_config(), _load_pr(ref), item_id, req.message)
+        return fixwork.accept_patch(store(), load_config(), _load_pr(ref), item_id, req.message, req.allow_conflicts)
+    except git.EditsWouldConflict as e:
+        raise _edits_conflict(e) from e
     except (ValueError, git.GitError) as e:
         raise HTTPException(409, str(e)) from e
 
@@ -865,6 +873,8 @@ def _ci_call(fn, *args):
         return fn(*args)
     except ci.CIError as e:
         raise HTTPException(409, str(e)) from e
+    except git.EditsWouldConflict as e:
+        raise _edits_conflict(e) from e
     except GitHubError as e:
         raise HTTPException(502, str(e)) from e
     except git.GitError as e:
@@ -942,10 +952,14 @@ def post_ci_fix(owner: str, repo: str, number: int, failure_id: str) -> CIView:
     return CIView(session=_ci_call(ci.start_fix, cfg, pr, failure_id, name))
 
 
+class ApplyRequest(BaseModel):
+    allow_conflicts: bool = False  # commit even if your edits would conflict with it
+
+
 @app.post(PR + "/ci/failures/{failure_id}/fix/apply")
-def post_ci_fix_apply(owner: str, repo: str, number: int, failure_id: str) -> CIView:
+def post_ci_fix_apply(owner: str, repo: str, number: int, failure_id: str, req: ApplyRequest | None = None) -> CIView:
     cfg, pr = _pr_cfg(owner, repo, number)
-    return CIView(session=_ci_call(ci.apply_fix, cfg, pr, failure_id))
+    return CIView(session=_ci_call(ci.apply_fix, cfg, pr, failure_id, bool(req and req.allow_conflicts)))
 
 
 @app.delete(PR + "/ci/failures/{failure_id}/fix")

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PRContext } from "../App";
-import { api, type CICategory, type CIFailure, type CISession, type PRRef } from "../api";
+import { api, editsConflict, type CICategory, type CIFailure, type CISession, type PRRef } from "../api";
 import { CheckoutPath } from "../components/CheckoutPath";
 import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { BrandIcon, GitHubLink } from "../components/Brand";
@@ -11,7 +11,7 @@ import { ProposedFix } from "../components/ProposedFix";
 import { Spinner } from "../components/Spinner";
 import { prHref, useAIName } from "../lib";
 import { GitHubCommits, type WorkflowStep } from "./Merge";
-import { EditConflicts } from "../components/EditConflicts";
+import { EditConflicts, EditsConflictPrompt } from "../components/EditConflicts";
 
 // Fix CI: Start → Triage → Fix → Finish, like the other two workflows.
 
@@ -277,7 +277,8 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
   const setSession = useSetSession(prRef);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const askFix = useMutation({ mutationFn: () => api.ciFix(prRef, f.id), onSuccess: setSession });
-  const apply = useMutation({ mutationFn: () => api.ciFixApply(prRef, f.id), onSuccess: setSession });
+  const apply = useMutation({ mutationFn: (allowConflicts: boolean) => api.ciFixApply(prRef, f.id, allowConflicts), onSuccess: setSession });
+  const applyConflict = editsConflict(apply.error);
   const discard = useMutation({ mutationFn: () => api.ciFixDiscard(prRef, f.id), onSuccess: setSession });
   const retry = useMutation({ mutationFn: () => api.ciFixDiscard(prRef, f.id).then(() => api.ciFix(prRef, f.id)), onSuccess: setSession });
   const rerun = useMutation({ mutationFn: () => api.ciRerun(prRef, f.id), onSuccess: (v) => { setSession(v); setConfirmRerun(false); } });
@@ -345,11 +346,16 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
       {f.fix && f.status === "open" && (
         <ProposedFix
           fix={f.fix} where="the code" onWhat="on your branch" applyLabel="Apply and commit"
-          applyNote="Applying commits them to your checkout of the branch (only these files; it refuses if you have uncommitted edits in them). Push from Finish."
-          onApply={() => apply.mutate()} onDiscard={() => discard.mutate()} onRetry={() => retry.mutate()}
-          busy={apply.isPending || discard.isPending || retry.isPending} error={(apply.error || discard.error || retry.error) as Error | null}
+          applyNote="Applying commits them to your checkout of the branch (only these files). Uncommitted edits of yours in them are put back on top; if they'd conflict, you're asked first. Push from Finish."
+          onApply={() => apply.mutate(false)} onDiscard={() => discard.mutate()} onRetry={() => retry.mutate()}
+          busy={apply.isPending || discard.isPending || retry.isPending || !!applyConflict}
+          error={((applyConflict ? null : apply.error) || discard.error || retry.error) as Error | null}
           target={<CheckoutPath prRef={prRef} label="Commits to your checkout" />}
         />
+      )}
+      {f.fix && f.status === "open" && applyConflict && (
+        <EditsConflictPrompt conflict={applyConflict} busy={apply.isPending}
+          onProceed={() => apply.mutate(true)} onCancel={() => apply.reset()} />
       )}
 
       {f.status === "fixed" && (

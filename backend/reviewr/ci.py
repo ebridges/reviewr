@@ -356,16 +356,20 @@ def _fix_job(cfg: Config, pr: PullRequest, failure_id: str, base: str, prompt: s
         _jobs.discard(pr.ref.key)
 
 
-def apply_fix(cfg: Config, pr: PullRequest, failure_id: str) -> CISession:
+def apply_fix(cfg: Config, pr: PullRequest, failure_id: str, allow_conflicts: bool = False) -> CISession:
     """Commit the proposed fix to your checkout (only its files; your uncommitted edits
-    to them are merged back on top)."""
+    to them are merged back on top). Raises git.EditsWouldConflict if they would
+    conflict, unless `allow_conflicts`."""
     with _lock:
         s = load(cfg, pr)
         f = s.failures.get(failure_id) if s else None
         if not f or not f.fix or f.fix.status != "ready" or not f.fix.diff.strip():
             raise CIError("There's no proposed fix to apply.")
         try:
-            sha, _, conflicts = fixwork.apply_patch_and_commit(cfg, pr, fixwork.work_worktree(cfg, pr), f.fix.diff, f"Fix CI: {f.title or f.name}")
+            sha, _, conflicts = fixwork.apply_patch_and_commit(
+                cfg, pr, fixwork.work_worktree(cfg, pr), f.fix.diff, f"Fix CI: {f.title or f.name}", allow_conflicts)
+        except git.EditsWouldConflict:
+            raise  # the page asks what to do
         except git.GitError as e:
             raise CIError(str(e)) from e
         f.fix, f.status, f.commit_sha, f.edit_conflicts = None, "fixed", sha, conflicts

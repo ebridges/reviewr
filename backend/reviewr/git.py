@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from reviewr.models import ChangedFile, StaleTrace, TraceCommit
 
@@ -324,40 +326,129 @@ def _blob(worktree: Path, rev: str, path: str) -> bytes | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+MergeOutcome = Literal["keep", "mine", "merged", "conflict", "deleted_conflict", "binary_conflict"]
+
+
+def _merge3(mine: bytes | None, base: bytes | None, theirs: bytes | None) -> tuple[MergeOutcome, bytes | None]:
+    """How your version of a file (`mine`) merges onto a commit that changed it from
+    `base` to `theirs`. Returns the outcome and, for "merged" and "conflict", the merged
+    content (with conflict markers for "conflict"). Writes nothing to the worktree.
+
+    keep: nothing of yours to bring back. mine: the commit didn't change the file, so
+    yours goes back as it was. deleted_conflict: deleted on one side, changed on the
+    other. binary_conflict: git can't merge it (e.g. a binary file)."""
+    if mine == base or mine == theirs:
+        return "keep", None
+    if theirs == base:
+        return "mine", None
+    if mine is None or theirs is None:
+        return "deleted_conflict", None
+    with tempfile.TemporaryDirectory(prefix="reviewr-merge-") as tmp:
+        files = []
+        for name, data in (("yours", mine), ("before", base or b""), ("committed", theirs)):
+            f = Path(tmp) / name
+            f.write_bytes(data)
+            files.append(str(f))
+        proc = subprocess.run(
+            ["git", "merge-file", "-p", "-L", "your edits", "-L", "before", "-L", "reviewr's commit", *files],
+            capture_output=True, check=False,
+        )
+    if proc.returncode < 0 or (proc.returncode > 0 and not proc.stdout):
+        return "binary_conflict", None
+    return ("conflict" if proc.returncode > 0 else "merged"), proc.stdout
+
+
 def merge_back(worktree: Path, saved: dict[str, bytes | None], base_rev: str) -> list[str]:
     """Put your saved edits back on top of what HEAD has now, merging each file three
     ways: the file at `base_rev` (before the commit), at HEAD (after it), and yours.
     Files that conflict keep conflict markers; returns their paths."""
     conflicts: list[str] = []
     for p, mine in saved.items():
-        base, theirs = _blob(worktree, base_rev, p), _blob(worktree, "HEAD", p)
-        target = worktree / p
-        if mine == base or mine == theirs:
-            continue  # nothing of yours to bring back
-        if theirs == base:  # the commit didn't change this file after all
+        outcome, merged = _merge3(mine, _blob(worktree, base_rev, p), _blob(worktree, "HEAD", p))
+        if outcome == "mine":
             put_back(worktree, {p: mine})
-            continue
-        if mine is None or theirs is None:  # deleted on one side, changed on the other
-            conflicts.append(p)
-            continue  # keep the committed version; your deletion or edit is the conflict
-        with tempfile.TemporaryDirectory(prefix="reviewr-merge-") as tmp:
-            files = []
-            for name, data in (("yours", mine), ("before", base or b""), ("committed", theirs)):
-                f = Path(tmp) / name
-                f.write_bytes(data)
-                files.append(str(f))
-            proc = subprocess.run(
-                ["git", "merge-file", "-p", "-L", "your edits", "-L", "before", "-L", "reviewr's commit", *files],
-                capture_output=True, check=False,
-            )
-        if proc.returncode < 0 or (proc.returncode > 0 and not proc.stdout):  # e.g. a binary file
+        elif outcome == "deleted_conflict":
+            conflicts.append(p)  # keep the committed version; your deletion or edit is the conflict
+        elif outcome == "binary_conflict":
             put_back(worktree, {p: mine})
             conflicts.append(p)
-            continue
-        target.write_bytes(proc.stdout)
-        if proc.returncode > 0:
-            conflicts.append(p)
+        elif merged is not None:
+            (worktree / p).write_bytes(merged)
+            if outcome == "conflict":
+                conflicts.append(p)
     return conflicts
+
+
+class EditsWouldConflict(GitError):
+    """Committing a patch would leave conflict markers in files you have uncommitted
+    edits in. `files` maps each such file to an excerpt of what would conflict."""
+
+    def __init__(self, worktree: Path, files: dict[str, str]):
+        self.worktree, self.files = worktree, files
+        super().__init__(
+            f"Your uncommitted edits in {worktree} conflict with this fix in: {', '.join(files)}. "
+            "Committing it now would leave conflict markers in those files. Commit or stash your edits first "
+            f"(to see them: git -C {worktree} status), or commit the fix anyway and resolve the markers."
+        )
+
+
+def _conflict_excerpt(merged: bytes, context: int = 2, limit: int = 80) -> str:
+    """The conflicting regions of a merged file, with a few lines around each."""
+    lines = merged.decode("utf-8", errors="replace").splitlines()
+    keep: set[int] = set()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("<<<<<<< "):
+            start = i
+        elif line.startswith(">>>>>>> ") and start is not None:
+            keep.update(range(max(0, start - context), min(len(lines), i + context + 1)))
+            start = None
+    out, prev = [], None
+    for i in sorted(keep):
+        if prev is not None and i != prev + 1:
+            out.append("…")
+        out.append(lines[i])
+        prev = i
+    if len(out) > limit:
+        out = out[:limit] + ["…"]
+    return "\n".join(out)
+
+
+def preview_merge_back(worktree: Path, patch: str) -> dict[str, str]:
+    """What apply_and_commit would do to your uncommitted edits, without changing
+    anything: the files where merging them back onto the commit would conflict, each
+    with an excerpt of the conflict. Empty if nothing would conflict, or if the patch
+    can't be applied to HEAD (the real attempt then fails and puts everything back)."""
+    dirty = dirty_paths(worktree, patch_paths(patch))
+    if not dirty:
+        return {}
+    with tempfile.TemporaryDirectory(prefix="reviewr-preview-") as tmp:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        patch_file = Path(tmp) / "fix.patch"
+        patch_file.write_text(patch)
+
+        def run(*args: str) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, env=env, check=False)
+
+        if run("read-tree", "HEAD").returncode != 0:
+            return {}
+        if run("apply", "--cached", str(patch_file)).returncode != 0 and \
+                run("apply", "--cached", "--3way", str(patch_file)).returncode != 0:
+            return {}
+        out: dict[str, str] = {}
+        for p in dirty:
+            committed = run("show", f":{p}")
+            theirs = committed.stdout if committed.returncode == 0 else None
+            mine = (worktree / p).read_bytes() if (worktree / p).is_file() else None
+            outcome, merged = _merge3(mine, _blob(worktree, "HEAD", p), theirs)
+            if outcome == "conflict" and merged is not None:
+                out[p] = _conflict_excerpt(merged)
+            elif outcome == "deleted_conflict":
+                out[p] = ("You deleted this file and the fix changes it." if mine is None
+                          else "You changed this file and the fix deletes it.")
+            elif outcome == "binary_conflict":
+                out[p] = "Both you and the fix changed this file, and git can't merge it (it may be binary)."
+        return out
 
 
 def apply_and_commit(worktree: Path, patch: str, message: str, commit=None) -> tuple[str, list[str]]:

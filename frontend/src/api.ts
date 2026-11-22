@@ -350,12 +350,35 @@ export interface CIStatus {
 export const refKey = (r: PRRef) => `${r.owner}/${r.repo}#${r.number}`;
 const base = (r: PRRef) => `/api/prs/${r.owner}/${r.repo}/${r.number}`;
 
+/** An error from the backend. `detail` is the structured detail when the backend sent
+ *  one (e.g. EditsConflict); `message` is always readable text. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly detail: unknown) {
+    super(message);
+  }
+}
+
+/** Committing a fix would leave conflict markers in files you have uncommitted edits in
+ *  (backend: git.EditsWouldConflict). `files` maps each file to the conflicting lines. */
+export interface EditsConflict {
+  code: "edits_conflict";
+  message: string;
+  worktree: string;
+  files: Record<string, string>;
+}
+
+export function editsConflict(err: unknown): EditsConflict | null {
+  const d = err instanceof ApiError ? err.detail : null;
+  return d && typeof d === "object" && (d as { code?: string }).code === "edits_conflict" ? (d as EditsConflict) : null;
+}
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : body.detail ? JSON.stringify(body.detail) : "";
-    throw new Error(detail || `The server returned ${res.status} ${res.statusText}. Check the backend log.`);
+    const d = body.detail;
+    const text = typeof d === "string" ? d : typeof d?.message === "string" ? d.message : d ? JSON.stringify(d) : "";
+    throw new ApiError(text || `The server returned ${res.status} ${res.statusText}. Check the backend log.`, res.status, d);
   }
   return res.json();
 }
@@ -390,8 +413,8 @@ export const api = {
   itemAlreadyDone: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/already-done`, send("POST")),
   draftAll: (r: PRRef) => call<ReviewState>(`${base(r)}/plan/draft-all`, send("POST")),
   draft: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/draft`, send("POST")),
-  accept: (r: PRRef, id: number, message: string) =>
-    call<ReviewState>(`${base(r)}/plan/${id}/accept`, send("POST", { message })),
+  accept: (r: PRRef, id: number, message: string, allowConflicts = false) =>
+    call<ReviewState>(`${base(r)}/plan/${id}/accept`, send("POST", { message, allow_conflicts: allowConflicts })),
   runChecks: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/checks`, send("POST")),
   createJira: (r: PRRef, threadIds?: string[]) =>
     call<ReviewState>(`${base(r)}/jira`, send("POST", { thread_ids: threadIds ?? null })),
@@ -432,8 +455,8 @@ export const api = {
   ciPatch: (r: PRRef, id: string, patch: { category?: CICategory; status?: "open" | "fixed" | "dismissed" }) =>
     call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}`, send("PATCH", patch)),
   ciFix: (r: PRRef, id: string) => call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix`, send("POST")),
-  ciFixApply: (r: PRRef, id: string) =>
-    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix/apply`, send("POST")),
+  ciFixApply: (r: PRRef, id: string, allowConflicts = false) =>
+    call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix/apply`, send("POST", { allow_conflicts: allowConflicts })),
   ciFixDiscard: (r: PRRef, id: string) =>
     call<{ session: CISession | null }>(`${base(r)}/ci/failures/${encodeURIComponent(id)}/fix`, send("DELETE")),
   ciRerun: (r: PRRef, id: string) =>

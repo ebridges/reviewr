@@ -145,6 +145,53 @@ def test_patch_left_staged_by_a_failed_try_is_committed(setup):  # noqa: F811
     assert sh(clone, "status", "--porcelain") == "" and "'" not in (clone / "app.py").read_text()
 
 
+def test_fix_commits_when_your_edits_merge_back_cleanly(setup):  # noqa: F811
+    """Your edit (line 1) and the fix (line 5) don't overlap: no question, both kept."""
+    cfg, pr, clone = setup
+    _session_with_fix(cfg, pr, clone, _quote_patch(clone))
+    app = clone / "app.py"
+    app.write_text(app.read_text().replace("import os\n", "import os  # mine\n", 1))
+    f = ci.apply_fix(cfg, pr, "2").failures["2"]
+    assert f.status == "fixed" and f.edit_conflicts == []
+    text = app.read_text()
+    assert "import os  # mine" in text and "'" not in text and "<<<<<<<" not in text
+    assert "# mine" not in sh(clone, "show", "HEAD:app.py")  # your edit stays uncommitted
+    assert "# mine" in sh(clone, "diff")
+
+
+def test_fix_asks_before_leaving_conflict_markers(setup):  # noqa: F811
+    from reviewr import git
+
+    cfg, pr, clone = setup
+    _session_with_fix(cfg, pr, clone, _quote_patch(clone))
+    app = clone / "app.py"
+    mine = app.read_text().replace("'hello '", "'yo '")  # the line the fix changes
+    app.write_text(mine)
+    head = sh(clone, "rev-parse", "HEAD")
+    with pytest.raises(git.EditsWouldConflict) as e:
+        ci.apply_fix(cfg, pr, "2")
+    assert list(e.value.files) == ["app.py"] and "<<<<<<< your edits" in e.value.files["app.py"]
+    assert str(clone) in str(e.value) and "git -C" in str(e.value)
+    # Nothing changed: same commit, your file as you left it, the fix still waiting.
+    assert sh(clone, "rev-parse", "HEAD") == head and app.read_text() == mine
+    assert ci.load(cfg, pr).failures["2"].fix.status == "ready"
+
+    f = ci.apply_fix(cfg, pr, "2", allow_conflicts=True).failures["2"]
+    assert f.status == "fixed" and f.edit_conflicts == ["app.py"]
+    assert "<<<<<<< your edits" in app.read_text()
+
+
+def test_fix_asks_when_you_deleted_the_file(setup):  # noqa: F811
+    from reviewr import git
+
+    cfg, pr, clone = setup
+    _session_with_fix(cfg, pr, clone, _quote_patch(clone))
+    (clone / "app.py").unlink()
+    with pytest.raises(git.EditsWouldConflict) as e:
+        ci.apply_fix(cfg, pr, "2")
+    assert "You deleted" in e.value.files["app.py"] and not (clone / "app.py").exists()
+
+
 def test_jobs_are_counted_per_pr():
     from reviewr.jobs import Jobs
 

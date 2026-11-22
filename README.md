@@ -40,8 +40,10 @@ to replied:
    Claude in a throwaway worktree, with file tools only (Anthropic's text editor tool
    and file search; no shell), then checked and committed into your checkout touching
    only the patch's files. If you have uncommitted edits to those files, they're set
-   aside, the patch is committed, and your edits are merged back on top; files where
-   they conflict keep conflict markers and are listed. For your own items you pick which
+   aside, the patch is committed, and your edits are merged back on top. If they would
+   conflict, reviewr checks that first and asks: commit anyway (those files keep
+   conflict markers and are listed) or stop so you can commit or stash your edits. Fix
+   CI's Apply works the same way. For your own items you pick which
    changed files go into the commit.
 6. **Respond.** Review the summary comment and every reply. Submitting pushes the
    commits to the PR branch (fast-forward only), posts all replies as one review,

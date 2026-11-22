@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import type { PRContext } from "../App";
-import { api, type Thread, type WorkItem } from "../api";
+import { api, editsConflict, type Thread, type WorkItem } from "../api";
 import { CheckoutPath } from "../components/CheckoutPath";
 import { ResultCard, useCheckoutDetails } from "../components/ResultCard";
 import { GitHubLink } from "../components/Brand";
@@ -12,7 +12,7 @@ import { DiffView } from "../components/Code";
 import { Markdown } from "../components/Markdown";
 import { prHref, storageGet, threadTitle, where } from "../lib";
 import { itemStatus } from "./Plan";
-import { EditConflicts } from "../components/EditConflicts";
+import { EditConflicts, EditsConflictPrompt } from "../components/EditConflicts";
 
 export function Fix({ ctx, arg }: { ctx: PRContext; arg?: string }) {
   const { pr, state } = ctx.data!;
@@ -140,7 +140,8 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
     },
     onSuccess: (st) => { ctx.setState(st); setText(null); },
   });
-  const accept = useMutation({ mutationFn: () => api.accept(pr.ref, item.id, message), onSuccess: ctx.setState });
+  const accept = useMutation({ mutationFn: (allowConflicts: boolean) => api.accept(pr.ref, item.id, message, allowConflicts), onSuccess: ctx.setState });
+  const acceptConflict = editsConflict(accept.error);
   const checks = useMutation({ mutationFn: () => api.runChecks(pr.ref, item.id), onSuccess: ctx.setState });
   const files = (item.patch.match(/^diff --git/gm) ?? []).length;
   const failing = item.check_report?.runs.filter((r) => r.status === "failed" || r.status === "error").length ?? 0;
@@ -216,11 +217,14 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
               <p className="warn-box small">{failing} check{failing === 1 ? "" : "s"} failed or couldn't run. You can still accept, or ask the agent to fix them first.</p>
             )}
             <div className="row-wrap">
-              <button className="btn primary" onClick={() => accept.mutate()} disabled={accept.isPending || !message.trim() || item.checks_running}>Accept and commit</button>
+              <button className="btn primary" onClick={() => accept.mutate(false)} disabled={accept.isPending || !message.trim() || item.checks_running || !!acceptConflict}>Accept and commit</button>
               <span className="muted small">Commits locally on reviewr's branch. Pushed together with the replies in Respond.</span>
             </div>
             <CheckoutPath prRef={pr.ref} label="Commits to your checkout" />
-            {accept.error && <p className="error small">{(accept.error as Error).message}</p>}
+            {acceptConflict ? (
+              <EditsConflictPrompt conflict={acceptConflict} busy={accept.isPending}
+                onProceed={() => accept.mutate(true)} onCancel={() => accept.reset()} />
+            ) : accept.error && <p className="error small">{(accept.error as Error).message}</p>}
             <ReviewThreads ctx={ctx} item={item} collapsed />
             <PromptCard {...promptProps} heading="Ask the agent to change it" action="Redraft with this prompt"
               note="The prompt the last draft used. Add what you want changed (at the end is fine) and redraft; the new draft starts over from the branch." />

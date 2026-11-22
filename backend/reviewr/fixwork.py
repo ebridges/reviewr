@@ -147,11 +147,16 @@ def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, path
         envs.unlink(links)
 
 
-def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str, message: str) -> tuple[str, list[str], list[str]]:
+def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str, message: str,
+                           allow_conflicts: bool = False) -> tuple[str, list[str], list[str]]:
     """Apply an agent's patch to your checkout and commit only its files, with your
     commit hooks. Uncommitted edits of yours to those files are set aside, then merged
     back on top of the commit. If the commit fails, everything is put back as it was. A
     patch that a failed earlier attempt left staged is committed as it is.
+
+    If merging your edits back would conflict, raises git.EditsWouldConflict before
+    changing anything, unless `allow_conflicts` (you chose to go ahead and resolve the
+    markers yourself).
 
     Returns the commit, the files the hooks changed, and the files where your edits
     conflicted with the commit (they keep conflict markers)."""
@@ -159,6 +164,8 @@ def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str,
     if git.staged_as(work, patch, paths):
         sha, fixed = commit_with_hooks(cfg, pr.ref.slug, work, message, paths)
         return sha, fixed, []
+    if not allow_conflicts and (would := git.preview_merge_back(work, patch)):
+        raise git.EditsWouldConflict(work, would)
     fixed: list[str] = []
 
     def commit(paths: list[str]) -> str:
@@ -258,7 +265,8 @@ def _draft_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: P
         git.remove_worktree(repo_cfg.path, draft)
 
 
-def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, message: str) -> ReviewState:
+def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, message: str,
+                 allow_conflicts: bool = False) -> ReviewState:
     work = work_worktree(cfg, pr)
     item = store.get_state(pr.ref).item(item_id)
     if item.status == "ready" and not item.patch.strip():
@@ -268,7 +276,7 @@ def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, messa
         )
     if item.status != "ready" or not item.patch:
         raise ValueError("This work item has no drafted patch to accept.")
-    sha, _, conflicts = apply_patch_and_commit(cfg, pr, work, item.patch, message)
+    sha, _, conflicts = apply_patch_and_commit(cfg, pr, work, item.patch, message, allow_conflicts)
 
     def committed(s: ReviewState) -> None:
         it = s.item(item_id)
