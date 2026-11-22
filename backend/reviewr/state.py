@@ -90,6 +90,8 @@ class WorkItem(BaseModel):
     check_report: CheckReport | None = None
     checks_running: bool = False
     proposed_fix: ProposedFix | None = None
+    # Files where your uncommitted edits, merged back after the commit, conflicted with it.
+    edit_conflicts: list[str] = Field(default_factory=list)
 
 
 class ReviewState(BaseModel):

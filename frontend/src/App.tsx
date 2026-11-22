@@ -1,5 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import { Header, STEPS } from "./components/Header";
-import type { PRView } from "./api";
+import { api, type PRView } from "./api";
 import { prHref, usePR, useRoute, type Route } from "./lib";
 import { CI } from "./pages/CI";
 import { Fix } from "./pages/Fix";
@@ -9,6 +10,7 @@ import { Plan } from "./pages/Plan";
 import { PRList } from "./pages/PRList";
 import { Respond } from "./pages/Respond";
 import { Settings } from "./pages/Settings";
+import { Setup } from "./pages/Setup";
 import { Triage } from "./pages/Triage";
 
 export default function App() {
@@ -25,7 +27,31 @@ export default function App() {
 }
 
 function PRPages({ route }: { route: Route }) {
-  const pr = usePR(route.ref!);
+  const ref = route.ref!;
+  // Whether the repo has a clone yet; until it does, the PR opens on workspace setup.
+  const setup = useQuery({
+    queryKey: ["setup", ref.owner, ref.repo, ref.number],
+    queryFn: () => api.setup(ref),
+    refetchInterval: (q) => (q.state.data?.running ? 1500 : false),
+  });
+  const s = setup.data;
+  const inSetup = !!s && (!!s.needed || s.running);
+  const pr = usePR(ref, !!s && !inSetup);
+
+  if (setup.error) {
+    return <div className="app"><Header route={route} /><div className="banner error">{(setup.error as Error).message}</div></div>;
+  }
+  if (!s) {
+    return <div className="app"><Header route={route} /><div className="pane-msg muted">Loading…</div></div>;
+  }
+  if (inSetup) {
+    return (
+      <div className="app">
+        <Header route={route} />
+        <Setup prRef={ref} setup={setup} />
+      </div>
+    );
+  }
 
   return (
     <div className="app">

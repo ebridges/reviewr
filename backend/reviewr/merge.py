@@ -748,7 +748,7 @@ and why."""
 
 
 def start_fix(cfg: Config, pr: PullRequest, failure: str, ai_name: str, label: str = "") -> MergeSession:
-    from reviewr.agent import run_agent  # the Agent SDK import is slow; only load it when needed
+    from reviewr.agent import run_agent
 
     if not failure.strip():
         raise MergeError("There's no failure to fix.")
@@ -779,7 +779,7 @@ def start_fix(cfg: Config, pr: PullRequest, failure: str, ai_name: str, label: s
 
 def _fix_job(cfg: Config, pr: PullRequest, prompt: str, run_agent) -> None:
     try:
-        output = run_agent(tree_path(cfg, pr), prompt, cfg.llm.model)
+        output = run_agent(tree_path(cfg, pr), prompt, cfg.llm.model, pr.ref.slug)
         diff = _unstaged_diff(cfg, pr)
 
         def done(s: MergeSession) -> None:

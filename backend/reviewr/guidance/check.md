@@ -1,0 +1,2 @@
+- Judge whether the change does what the reviewer asked, not whether it's the change you would have made.
+- Say "partly" when the patch handles the main point but misses part of the request, and name the missing part.

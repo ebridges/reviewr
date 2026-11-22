@@ -303,20 +303,87 @@ def dirty_paths(worktree: Path, paths: list[str]) -> list[str]:
     return [entry[3:] for entry in out.split("\0") if len(entry) > 3]
 
 
-def apply_and_commit(worktree: Path, patch: str, message: str) -> str:
-    """Apply a patch and commit only the files it touches. Refuses if any of those files
-    has uncommitted changes, so your own edits are never mixed into the commit."""
+def set_aside(worktree: Path, paths: list[str]) -> dict[str, bytes | None]:
+    """Your working-tree versions of `paths` (None for a file you deleted)."""
+    return {p: (worktree / p).read_bytes() if (worktree / p).is_file() else None for p in paths}
+
+
+def put_back(worktree: Path, saved: dict[str, bytes | None]) -> None:
+    """Write files saved by set_aside back exactly as they were (unstaged)."""
+    for p, data in saved.items():
+        target = worktree / p
+        if data is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+
+def _blob(worktree: Path, rev: str, path: str) -> bytes | None:
+    proc = subprocess.run(["git", "-C", str(worktree), "show", f"{rev}:{path}"], capture_output=True, check=False)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def merge_back(worktree: Path, saved: dict[str, bytes | None], base_rev: str) -> list[str]:
+    """Put your saved edits back on top of what HEAD has now, merging each file three
+    ways: the file at `base_rev` (before the commit), at HEAD (after it), and yours.
+    Files that conflict keep conflict markers; returns their paths."""
+    conflicts: list[str] = []
+    for p, mine in saved.items():
+        base, theirs = _blob(worktree, base_rev, p), _blob(worktree, "HEAD", p)
+        target = worktree / p
+        if mine == base or mine == theirs:
+            continue  # nothing of yours to bring back
+        if theirs == base:  # the commit didn't change this file after all
+            put_back(worktree, {p: mine})
+            continue
+        if mine is None or theirs is None:  # deleted on one side, changed on the other
+            conflicts.append(p)
+            continue  # keep the committed version; your deletion or edit is the conflict
+        with tempfile.TemporaryDirectory(prefix="reviewr-merge-") as tmp:
+            files = []
+            for name, data in (("yours", mine), ("before", base or b""), ("committed", theirs)):
+                f = Path(tmp) / name
+                f.write_bytes(data)
+                files.append(str(f))
+            proc = subprocess.run(
+                ["git", "merge-file", "-p", "-L", "your edits", "-L", "before", "-L", "reviewr's commit", *files],
+                capture_output=True, check=False,
+            )
+        if proc.returncode < 0 or (proc.returncode > 0 and not proc.stdout):  # e.g. a binary file
+            put_back(worktree, {p: mine})
+            conflicts.append(p)
+            continue
+        target.write_bytes(proc.stdout)
+        if proc.returncode > 0:
+            conflicts.append(p)
+    return conflicts
+
+
+def apply_and_commit(worktree: Path, patch: str, message: str, commit=None) -> tuple[str, list[str]]:
+    """Apply a patch and commit only the files it touches, never mixing your edits into
+    the commit. If you have uncommitted edits to those files, they're set aside first
+    and merged back on top of the commit afterwards. Returns the commit and the files
+    where your edits conflicted with it (left with conflict markers).
+
+    `commit(paths)` makes the commit and returns its sha (by default, a plain git commit
+    of `paths`). If applying or committing fails, the files are restored as they were."""
     paths = patch_paths(patch)
-    if dirty := dirty_paths(worktree, paths):
-        raise GitError(
-            "These files have uncommitted changes in your worktree, so the patch wasn't applied: "
-            + ", ".join(dirty) + ". Commit or stash them, then accept again."
-        )
-    with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False) as f:
-        f.write(patch)
-    _git(worktree, "apply", "--3way", "--index", f.name)
-    _git(worktree, "commit", "-m", message, "--", *paths)
-    return head_sha(worktree)
+    saved = set_aside(worktree, dirty_paths(worktree, paths))
+    base = head_sha(worktree)
+    restore_paths(worktree, list(saved))
+    try:
+        apply_index(worktree, patch)
+        if commit is not None:
+            sha = commit(paths)
+        else:
+            _git(worktree, "commit", "-m", message, "--", *paths)
+            sha = head_sha(worktree)
+    except GitError:
+        restore_paths(worktree, paths)
+        put_back(worktree, saved)
+        raise
+    return sha, merge_back(worktree, saved, base)
 
 
 def apply_index(worktree: Path, patch: str) -> None:

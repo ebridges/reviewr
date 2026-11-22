@@ -58,6 +58,6 @@ def draft_replies(pr: PullRequest, state: ReviewState, thread_ids: list[str], cf
         blocks.append(render_thread(pr.thread(tid), extra=extra))
     if not blocks:
         return {}
-    result = structured(cfg, SYSTEM, "\n\n".join(blocks), _Result, max_tokens=16000)
+    result = structured(cfg, SYSTEM, "\n\n".join(blocks), _Result, max_tokens=16000, step="replies", slug=pr.ref.slug)
     wanted = set(thread_ids)
     return {r.thread_id: r.reply.strip() for r in result.replies if r.thread_id in wanted}

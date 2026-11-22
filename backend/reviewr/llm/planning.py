@@ -36,7 +36,7 @@ def make_plan(pr: PullRequest, state: ReviewState, cfg: LLMConfig) -> list[WorkI
         d = state.decisions[tid]
         extra = f"<author_note>{d.note}</author_note>" if d.note else ""
         blocks.append(render_thread(pr.thread(tid), extra=extra))
-    result = structured(cfg, SYSTEM, "\n\n".join(blocks), _Result, max_tokens=16000)
+    result = structured(cfg, SYSTEM, "\n\n".join(blocks), _Result, max_tokens=16000, step="plan", slug=pr.ref.slug)
 
     remaining = set(fix_ids)
     items: list[WorkItem] = []

@@ -49,7 +49,7 @@ def _render(f: CIFailure) -> str:
     )
 
 
-def analyze(cfg: LLMConfig, pr_title: str, changed_files: list[str]):
+def analyze(cfg: LLMConfig, pr_title: str, changed_files: list[str], slug: str | None = None):
     """A function ci.start can call with (session, failures)."""
 
     def run(s: CISession, failures: list[CIFailure]) -> dict[str, dict]:
@@ -57,7 +57,7 @@ def analyze(cfg: LLMConfig, pr_title: str, changed_files: list[str]):
             return {}
         files = "\n".join(changed_files[:300]) + (f"\n… and {len(changed_files) - 300} more" if len(changed_files) > 300 else "")
         user = f"PR: {pr_title}\n\n<changed_files>\n{files}\n</changed_files>\n\n" + "\n\n".join(_render(f) for f in failures)
-        result = structured(cfg, SYSTEM, user, _Result)
+        result = structured(cfg, SYSTEM, user, _Result, step="ci", slug=slug)
         name = "Codex" if ai.current() == "codex" else "Claude"
         known = {f.id for f in failures}
         return {

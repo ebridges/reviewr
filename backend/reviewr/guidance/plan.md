@@ -1,0 +1,3 @@
+- Group threads that change the same function or the same concept, even across files.
+- Keep a work item small enough to review as one commit; split unrelated changes in one file into separate items.
+- Put changes other items depend on (a rename, a shared helper) first.

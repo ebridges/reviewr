@@ -33,6 +33,6 @@ def check_patch(pr: PullRequest, thread_ids: list[str], patch: str, cfg: LLMConf
         return {tid: ThreadCheck(addressed=False, note="No changes yet.") for tid in thread_ids}
     threads = "\n\n".join(render_thread(pr.thread(tid)) for tid in thread_ids)
     user = f"{threads}\n\n<patch>\n{patch[:MAX_PATCH_CHARS]}\n</patch>"
-    result = structured(cfg, SYSTEM, user, _Result, max_tokens=8000)
+    result = structured(cfg, SYSTEM, user, _Result, max_tokens=8000, step="check", slug=pr.ref.slug)
     wanted = set(thread_ids)
     return {c.thread_id: ThreadCheck(addressed=c.addressed, note=c.note) for c in result.checks if c.thread_id in wanted}

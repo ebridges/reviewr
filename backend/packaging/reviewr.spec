@@ -11,12 +11,10 @@ hiddenimports = (
     # loop implementations by name, so the analysis can't see them.
     collect_submodules("reviewr")
     + collect_submodules("uvicorn")
+    # The Keychain backend is chosen at runtime.
+    + collect_submodules("keyring.backends")
 )
-datas = (
-    collect_data_files("reviewr")  # github/queries/*.graphql
-    # Includes _bundled/claude, the Claude Code CLI the Agent SDK runs.
-    + collect_data_files("claude_agent_sdk")
-)
+datas = collect_data_files("reviewr")  # github/queries/*.graphql, guidance/*.md
 
 a = Analysis(
     ["entry.py"],

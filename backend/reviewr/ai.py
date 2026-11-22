@@ -1,47 +1,29 @@
-"""Which AI provider reviewr uses: Claude (Anthropic SDK and Claude Agent SDK) or Codex
-(the OpenAI Codex CLI, signed in with `codex login`).
+"""Which AI provider reviewr uses: Claude (the Anthropic API) or Codex (the OpenAI Codex
+CLI, signed in with `codex login`).
 
 The choice applies to every AI step: decision suggestions, reply drafts, work-item
-planning, patch checks, and the coding agent. It's saved in <data_dir>/settings.json so
-it survives restarts; `[ai] provider` in reviewr.toml sets the default.
+planning, patch checks, and the coding agent. It's part of the settings (ai.provider);
+the Claude / Codex switch in the header and Settings both change it.
 """
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from typing import Literal
 
-from reviewr.config import load_config
+from reviewr.config import load_config, update_config
 
 Provider = Literal["claude", "codex"]
 PROVIDERS: tuple[Provider, ...] = ("claude", "codex")
 
 
-def _settings_path():
-    return load_config().data_dir / "settings.json"
-
-
-def _read() -> dict:
-    p = _settings_path()
-    try:
-        return json.loads(p.read_text()) if p.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
 def current() -> Provider:
-    value = _read().get("ai_provider") or load_config().ai.provider
-    return value if value in PROVIDERS else "claude"
+    return load_config().ai.provider
 
 
 def set_current(provider: Provider) -> None:
-    data = _read()
-    data["ai_provider"] = provider
-    p = _settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2))
+    update_config(lambda c: setattr(c.ai, "provider", provider))
 
 
 def codex_ready() -> tuple[bool, str | None]:

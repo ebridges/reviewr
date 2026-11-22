@@ -77,6 +77,7 @@ class CIFailure(BaseModel):
     status: Status = "open"
     fix: ProposedFix | None = None
     commit_sha: str | None = None
+    edit_conflicts: list[str] = Field(default_factory=list)  # see WorkItem.edit_conflicts
 
 
 class CISession(BaseModel):
@@ -333,7 +334,7 @@ def _fix_job(cfg: Config, pr: PullRequest, failure_id: str, base: str, prompt: s
     scratch = _dir(cfg, pr) / f"fix-{re.sub(r'[^A-Za-z0-9]+', '-', failure_id)}"
     try:
         git.create_draft_worktree(repo_cfg.path, scratch, base)
-        output = run_agent(scratch, prompt, cfg.llm.model)
+        output = run_agent(scratch, prompt, cfg.llm.model, pr.ref.slug)
         diff = git.unstaged_diff(scratch, envs.provided_paths(repo_cfg))
 
         def done(s: CISession) -> None:
@@ -356,18 +357,18 @@ def _fix_job(cfg: Config, pr: PullRequest, failure_id: str, base: str, prompt: s
 
 
 def apply_fix(cfg: Config, pr: PullRequest, failure_id: str) -> CISession:
-    """Commit the proposed fix to your checkout (only its files; refuses if they have
-    uncommitted edits)."""
+    """Commit the proposed fix to your checkout (only its files; your uncommitted edits
+    to them are merged back on top)."""
     with _lock:
         s = load(cfg, pr)
         f = s.failures.get(failure_id) if s else None
         if not f or not f.fix or f.fix.status != "ready" or not f.fix.diff.strip():
             raise CIError("There's no proposed fix to apply.")
         try:
-            sha, _ = fixwork.apply_patch_and_commit(cfg, pr, fixwork.work_worktree(cfg, pr), f.fix.diff, f"Fix CI: {f.title or f.name}")
+            sha, _, conflicts = fixwork.apply_patch_and_commit(cfg, pr, fixwork.work_worktree(cfg, pr), f.fix.diff, f"Fix CI: {f.title or f.name}")
         except git.GitError as e:
             raise CIError(str(e)) from e
-        f.fix, f.status, f.commit_sha = None, "fixed", sha
+        f.fix, f.status, f.commit_sha, f.edit_conflicts = None, "fixed", sha, conflicts
         _save(cfg, pr, s)
         return s
 

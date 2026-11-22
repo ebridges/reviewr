@@ -1,8 +1,9 @@
 """Jira Cloud: create one follow-up issue for deferred review threads.
 
-Auth is Jira Cloud's basic auth: an Atlassian account email and an API token
-(https://id.atlassian.com/manage-profile/security/api-tokens), from $JIRA_EMAIL and
-$JIRA_API_TOKEN (or .env). Uses the REST API v3.
+Auth is Jira Cloud's basic auth: an Atlassian account email (in Settings) and an API
+token (https://id.atlassian.com/manage-profile/security/api-tokens) saved in the
+Keychain from Settings. $JIRA_EMAIL and $JIRA_API_TOKEN still work as overrides.
+Uses the REST API v3.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from reviewr import secrets
 from reviewr.config import JiraConfig
 from reviewr.models import PullRequest, Thread
 
@@ -21,10 +23,10 @@ class JiraError(RuntimeError):
 
 
 def _auth(cfg: JiraConfig) -> tuple[str, str]:
-    email = cfg.email or os.environ.get("JIRA_EMAIL")
-    token = os.environ.get("JIRA_API_TOKEN")
+    email = os.environ.get("JIRA_EMAIL") or cfg.email
+    token = os.environ.get("JIRA_API_TOKEN") or secrets.get_secret(secrets.JIRA_API_TOKEN)
     if not email or not token:
-        raise JiraError("Set JIRA_EMAIL and JIRA_API_TOKEN (in .env) to use Jira.")
+        raise JiraError("Add your Atlassian email and a Jira API token under Settings → Jira.")
     return email, token
 
 

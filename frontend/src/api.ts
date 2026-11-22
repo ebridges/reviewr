@@ -73,6 +73,7 @@ export interface WorkItem {
   patch: string;
   checks: Record<string, ThreadCheck>;
   commit_sha: string | null;
+  edit_conflicts: string[];
   error: string | null;
   agent_log: string;
   instruction: string;
@@ -160,18 +161,53 @@ export interface Submission {
   rerequest: string[];
 }
 
+// Settings (backend/reviewr/config.py): the whole configuration, edited on the Settings page.
+export interface CheckConfigData {
+  name: string; kind: "lint" | "test"; match: string[]; cwd: string; run: string[];
+  discover: string | string[] | null; timeout: number; max_tests: number;
+}
+export interface EnvConfigData {
+  name: string; files: string[]; install: string[][]; provides: Record<string, string>;
+  seed: string[]; install_seeded: string[][] | null; timeout: number;
+}
+export interface RepoConfigData {
+  path: string; envs: EnvConfigData[]; path_prepend: string[]; exclude_tests: string[];
+  checks: CheckConfigData[]; toolchain: Record<string, string>; guidance: Record<string, string>;
+}
+export interface ConfigData {
+  default_editor: string;
+  editors: Record<string, string[]>;
+  workspace_dir: string;
+  repos: Record<string, RepoConfigData>;
+  llm: { model: string; effort: string };
+  ai: { provider: "claude" | "codex"; codex_model: string | null; claude_auth: "ant" | "api_key" };
+  jira: { base_url: string; project: string; issue_type: string; email: string | null } | null;
+  guidance: Record<string, string>;
+  data_dir: string;
+}
+export type SecretName = "anthropic_api_key" | "jira_api_token";
+
 export interface Settings {
-  anthropic: string | null;
+  config: ConfigData;
+  secrets: Record<SecretName, boolean>;
+  claude: { method: "ant" | "api_key"; ready: boolean; detail: string; ant_installed: boolean; login_running: boolean };
   codex: { installed: boolean; status: string | null };
   github: string | null;
   github_login: string | null;
   rate_limit: { cost: number; remaining: number; reset_at: string } | null;
   jira: { configured: boolean; base_url?: string; project?: string; issue_type?: string; user?: string; error?: string };
-  model: string;
-  repos: Record<string, { path: string; checks: string[]; exclude_tests: string[]; envs: string[] }>;
-  editors: string[];
-  default_editor: string;
+  guidance: Record<string, { label: string; builtin: string }>;
+  settings_path: string;
 }
+
+// Workspace setup (backend/reviewr/workspace.py)
+export type SetupStepStatus = "pending" | "running" | "done" | "skipped" | "warning" | "failed";
+export interface SetupStep { id: string; title: string; status: SetupStepStatus; detail: string; log: string }
+export interface SetupSession {
+  slug: string; number: number; status: "running" | "done" | "failed";
+  started_at: string; finished_at: string | null; error: string | null; steps: SetupStep[];
+}
+export interface SetupView { needed: string | null; running: boolean; workspace_dir: string; session: SetupSession | null }
 
 export interface AppConfig { editors: string[]; default_editor: string; model: string; jira_project: string | null }
 
@@ -294,6 +330,7 @@ export interface CIFailure {
   status: "open" | "fixed" | "rerun" | "dismissed";
   fix: ProposedFixData | null;
   commit_sha: string | null;
+  edit_conflicts: string[];
 }
 export interface CISession {
   head_sha: string;
@@ -379,6 +416,12 @@ export const api = {
   open: (r: PRRef, opts: { path?: string; line?: number | null; editor: string }) =>
     call<{ argv: string[] }>(`${base(r)}/open`, send("POST", opts)),
   settings: () => call<Settings>("/api/settings"),
+  saveConfig: (cfg: ConfigData) => call<Settings>("/api/settings/config", send("PUT", cfg)),
+  setSecret: (name: SecretName, value: string) => call<Settings>(`/api/settings/secrets/${name}`, send("PUT", { value })),
+  deleteSecret: (name: SecretName) => call<Settings>(`/api/settings/secrets/${name}`, send("DELETE")),
+  claudeLogin: () => call<Settings["claude"]>("/api/settings/claude/login", send("POST")),
+  setup: (r: PRRef) => call<SetupView>(`${base(r)}/setup`),
+  startSetup: (r: PRRef) => call<SetupView>(`${base(r)}/setup`, send("POST")),
   mergeRemote: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote`),
   mergeRemoteSync: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote/sync`, send("POST", { confirm: true })),
   ciStatus: (r: PRRef, fresh = false) => call<CIStatus>(`${base(r)}/ci/status?fresh=${fresh}`),

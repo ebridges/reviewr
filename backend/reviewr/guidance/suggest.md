@@ -1,0 +1,4 @@
+- Suggest Fix only when the comment asks for a change you can point to in the code. A question or an opinion with no concrete change is Reply only.
+- When the reviewer's point is already handled by the current code, suggest Already done and say where.
+- Prefer Defer over Push back when the request is reasonable but outside this PR's scope.
+- Keep each reason to one sentence the author can act on.

@@ -301,10 +301,47 @@ def test_your_edits_are_seen_without_touching_your_index(tmp_path: Path):
     assert files.stdout.split() == ["a.py"]
     assert (tmp_path / "b.py").read_text() == "y = 2\n"
 
-    # A patch to a file you've edited is refused rather than mixed with your edits.
+    # A patch to a file you've edited that conflicts with your edit: the commit has only
+    # the patch, and your edit comes back with conflict markers.
     patch_b = "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-y = 1\n+y = 3\n"
-    with pytest.raises(git.GitError, match="uncommitted changes"):
-        git.apply_and_commit(tmp_path, patch_b, "agent: b")
+    _, conflicts = git.apply_and_commit(tmp_path, patch_b, "agent: b")
+    assert conflicts == ["b.py"]
+    committed = subprocess.run(["git", "-C", str(tmp_path), "show", "HEAD:b.py"], capture_output=True, text=True, check=True)
+    assert committed.stdout == "y = 3\n"
+    text = (tmp_path / "b.py").read_text()
+    assert "<<<<<<< your edits" in text and "y = 2" in text and "y = 3" in text
+
+
+def test_patch_merges_with_your_edits_to_other_lines(tmp_path: Path):
+    run = _repo(tmp_path)
+    (tmp_path / "m.py").write_text("a = 1\nb = 1\nc = 1\nd = 1\ne = 1\n")
+    run("add", ".")
+    run("commit", "-qm", "base")
+    (tmp_path / "m.py").write_text("a = 1\nb = 1\nc = 1\nd = 1\ne = 2\n")  # your edit, last line
+    patch = "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n-a = 1\n+a = 9\n b = 1\n"
+    sha, conflicts = git.apply_and_commit(tmp_path, patch, "agent: m")
+    assert conflicts == []
+    committed = subprocess.run(["git", "-C", str(tmp_path), "show", f"{sha}:m.py"], capture_output=True, text=True, check=True)
+    assert committed.stdout == "a = 9\nb = 1\nc = 1\nd = 1\ne = 1\n"  # only the patch
+    assert (tmp_path / "m.py").read_text() == "a = 9\nb = 1\nc = 1\nd = 1\ne = 2\n"  # both
+
+
+def test_failed_commit_puts_your_edits_back(tmp_path: Path):
+    run = _repo(tmp_path)
+    (tmp_path / "m.py").write_text("a = 1\n")
+    run("add", ".")
+    run("commit", "-qm", "base")
+    (tmp_path / "m.py").write_text("mine\n")
+    patch = "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-a = 1\n+a = 2\n"
+
+    def failing_commit(paths):
+        raise git.GitError("hooks failed")
+
+    with pytest.raises(git.GitError):
+        git.apply_and_commit(tmp_path, patch, "x", commit=failing_commit)
+    assert (tmp_path / "m.py").read_text() == "mine\n"
+    staged = subprocess.run(["git", "-C", str(tmp_path), "diff", "--cached", "--name-only"], capture_output=True, text=True, check=True)
+    assert staged.stdout == ""
 
 
 def test_branch_worktree_uses_your_local_branch_as_is(tmp_path: Path):
@@ -431,4 +468,4 @@ def test_codex_structured_call(monkeypatch):
 
     monkeypatch.setattr(ai, "current", lambda: "codex")
     monkeypatch.setattr(client.subprocess, "run", fake_run)
-    assert client.structured(LLMConfig(), "sys", "user", Answer).word == "fig"
+    assert client.structured(LLMConfig(), "sys", "user", Answer, step="suggest").word == "fig"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,9 +18,22 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from reviewr import ai, ci, cleanup, envs, fixwork, git, jira, merge, submit
+from reviewr import (
+    ai,
+    ci,
+    cleanup,
+    envs,
+    fixwork,
+    git,
+    guidance,
+    jira,
+    merge,
+    secrets,
+    submit,
+    workspace,
+)
 from reviewr.agent import agent_prompt
-from reviewr.config import DOTENV_KEYS, load_config, load_dotenv
+from reviewr.config import GUIDANCE_STEPS, Config, load_config, save_config, settings_path
 from reviewr.editor import EditorError, open_in_editor
 from reviewr.github import GitHubClient, GitHubError, fetch_pull_request
 from reviewr.github.fetch import PR_LISTS, close_pull_request, list_pull_requests, set_draft
@@ -38,7 +52,6 @@ from reviewr.store import Store
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
-load_dotenv()
 app = FastAPI(title="reviewr")
 
 # D4: a refresh within this window returns the cached copy instead of calling GitHub.
@@ -381,6 +394,22 @@ def _install_quietly(cfg, slug, env, read) -> None:
         log.exception("Installing %s failed", env.name)  # status shows "failed" with the log
 
 
+@app.get(PR + "/setup")
+def get_setup(owner: str, repo: str, number: int) -> dict:
+    """Whether the PR's repo needs workspace setup, and the latest setup run."""
+    return workspace.view(load_config(), _ref(owner, repo, number))
+
+
+@app.post(PR + "/setup")
+def post_setup(owner: str, repo: str, number: int) -> dict:
+    """Clone the repo if needed, check out the PR branch, find the Node and Python
+    versions, and install dependencies. Runs in the background; poll GET .../setup."""
+    ref = _ref(owner, repo, number)
+    cfg = load_config()
+    workspace.start(cfg, _load_pr(ref))
+    return workspace.view(cfg, ref)
+
+
 @app.get(PR + "/work")
 def get_work(owner: str, repo: str, number: int) -> dict:
     """Where the PR branch is checked out, how it compares with GitHub, what's uncommitted."""
@@ -462,7 +491,7 @@ def post_jira(owner: str, repo: str, number: int, req: JiraRequest) -> ReviewSta
     """Create one Jira issue for deferred threads. This writes to Jira."""
     cfg = load_config()
     if not cfg.jira:
-        raise HTTPException(400, "Jira isn't configured. Add a [jira] section to reviewr.toml.")
+        raise HTTPException(400, "Jira isn't set up. Add it under Settings → Jira.")
     ref = _ref(owner, repo, number)
     pr = _load_pr(ref)
     state = store().get_state(ref)
@@ -651,13 +680,13 @@ def post_merge_start(owner: str, repo: str, number: int) -> MergeView:
     cfg, pr = _pr_cfg(owner, repo, number)
     if (old := merge.load(cfg, pr)) and old.status == "committed":
         merge.discard(cfg, pr)
-    return _merge_view(_merge_call(merge.start, cfg, pr, conflict_ai.analyze(cfg.llm, pr.title)))
+    return _merge_view(_merge_call(merge.start, cfg, pr, conflict_ai.analyze(cfg.llm, pr.title, pr.ref.slug)))
 
 
 @app.post(PR + "/merge/reanalyze")
 def post_merge_reanalyze(owner: str, repo: str, number: int) -> MergeView:
     cfg, pr = _pr_cfg(owner, repo, number)
-    return _merge_view(_merge_call(merge.reanalyze, cfg, pr, conflict_ai.analyze(cfg.llm, pr.title)))
+    return _merge_view(_merge_call(merge.reanalyze, cfg, pr, conflict_ai.analyze(cfg.llm, pr.title, pr.ref.slug)))
 
 
 class ConflictPatch(BaseModel):
@@ -729,7 +758,7 @@ def post_conflict_propose(owner: str, repo: str, number: int, conflict_id: str, 
     if s is None or conflict_id not in s.conflicts:
         raise HTTPException(404, "Unknown conflict.")
     try:
-        result = _merge_call(conflict_ai.propose, cfg.llm, s, s.conflicts[conflict_id], req.instruction)
+        result = _merge_call(conflict_ai.propose, cfg.llm, s, s.conflicts[conflict_id], req.instruction, pr.ref.slug)
     except ValueError as e:
         raise HTTPException(502, str(e)) from e
 
@@ -830,7 +859,7 @@ def _ci_analyze(cfg, pr: PullRequest):
         changed = [f.path for f in git.changed_files(cfg.repo_path(pr.ref.slug), pr.base_oid, pr.head_oid)]
     except git.GitError:
         changed = []
-    return ci_ai.analyze(cfg.llm, pr.title, changed)
+    return ci_ai.analyze(cfg.llm, pr.title, changed, pr.ref.slug)
 
 
 @app.get(PR + "/ci/status")
@@ -956,7 +985,7 @@ def get_ai() -> dict:
     codex_ok, codex_status = ai.codex_ready()
     return {
         "provider": ai.current(),
-        "claude_ready": _anthropic_source() is not None,
+        "claude_ready": _claude_status()["ready"],
         "codex_ready": codex_ok,
         "codex_status": codex_status,
     }
@@ -989,20 +1018,51 @@ def get_config() -> dict:
     }
 
 
-def _anthropic_source() -> str | None:
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "ANTHROPIC_API_KEY from .env" if "ANTHROPIC_API_KEY" in DOTENV_KEYS else "ANTHROPIC_API_KEY from your shell"
-    if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-        return "ANTHROPIC_AUTH_TOKEN from the environment"
-    if (Path.home() / ".config" / "anthropic").exists():
-        return "ant CLI profile"
-    return None
+def _ant_profiles() -> list[str]:
+    """Profiles saved by `ant auth login` (they're what the SDK signs in with)."""
+    creds = Path(os.environ.get("ANTHROPIC_CONFIG_DIR") or Path.home() / ".config" / "anthropic") / "credentials"
+    return sorted(p.stem for p in creds.glob("*.json")) if creds.is_dir() else []
+
+
+def _claude_status() -> dict:
+    """How reviewr signs in to the Claude API, and whether that will work."""
+    method = load_config().ai.claude_auth
+    ant_installed = shutil.which("ant") is not None
+    if method == "api_key":
+        ready = secrets.has_secret(secrets.ANTHROPIC_API_KEY)
+        detail = "API key saved in the Keychain" if ready else "No API key saved"
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        ready, detail = True, "ANTHROPIC_API_KEY from your shell (it overrides the ant sign-in)"
+    elif os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        ready, detail = True, "ANTHROPIC_AUTH_TOKEN from your shell (it overrides the ant sign-in)"
+    elif profiles := _ant_profiles():
+        ready, detail = True, f"Signed in with the ant CLI ({', '.join(profiles)})"
+    else:
+        ready, detail = False, "Not signed in with the ant CLI" if ant_installed else "The ant CLI isn't installed"
+    return {"method": method, "ready": ready, "detail": detail, "ant_installed": ant_installed,
+            "login_running": _ant_login.get("proc") is not None and _ant_login["proc"].poll() is None}
+
+
+_ant_login: dict = {}
+
+
+@app.post("/api/settings/claude/login")
+def post_claude_login() -> dict:
+    """Start `ant auth login`, which opens your browser to sign in. Settings polls
+    /api/settings until the profile appears."""
+    if not shutil.which("ant"):
+        raise HTTPException(400, "Install the ant CLI first: brew install anthropics/tap/ant")
+    proc = _ant_login.get("proc")
+    if proc is None or proc.poll() is not None:
+        _ant_login["proc"] = subprocess.Popen(
+            ["ant", "auth", "login"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    return _claude_status()
 
 
 @app.get("/api/settings")
 def get_settings() -> dict:
-    anthropic = _anthropic_source()
-
     if os.environ.get("GITHUB_TOKEN"):
         gh_source, gh_login = "GITHUB_TOKEN", None
     else:
@@ -1012,24 +1072,54 @@ def get_settings() -> dict:
     rl = github().last_rate_limit if gh_source else None
     cfg = load_config()
     return {
-        "anthropic": anthropic,
+        "config": cfg.model_dump(mode="json"),
+        "secrets": {name: secrets.has_secret(name) for name in secrets.NAMES},
+        "claude": _claude_status(),
         "codex": _codex_status(),
         "github": gh_source,
         "github_login": gh_login,
         "rate_limit": rl.__dict__ if rl else None,
         "jira": _jira_status(cfg),
-        "model": cfg.llm.model,
-        "repos": {
-            slug: {"path": str(r.path), "checks": [f"{c.name} ({c.kind})" for c in r.checks], "exclude_tests": r.exclude_tests, "envs": [e.name for e in r.envs]}
-            for slug, r in cfg.repos.items()
+        "guidance": {
+            step: {"label": guidance.STEP_LABELS[step], "builtin": guidance.builtin(step)} for step in GUIDANCE_STEPS
         },
-        "editors": list(cfg.editors),
-        "default_editor": cfg.default_editor,
+        "settings_path": str(settings_path()),
     }
 
 
+@app.put("/api/settings/config")
+def put_settings_config(cfg: Config) -> dict:
+    """Save the settings. The whole configuration is sent; it's validated first."""
+    save_config(cfg)
+    return get_settings()
+
+
+class SecretRequest(BaseModel):
+    value: str
+
+
+@app.put("/api/settings/secrets/{name}")
+def put_secret(name: str, req: SecretRequest) -> dict:
+    """Save a secret in the Keychain. It's never sent back to the browser."""
+    if name not in secrets.NAMES:
+        raise HTTPException(404, "Unknown secret.")
+    secrets.set_secret(name, req.value)
+    if name == secrets.ANTHROPIC_API_KEY:
+        from reviewr.llm.client import _client_for
+
+        _client_for.cache_clear()
+    return get_settings()
+
+
+@app.delete("/api/settings/secrets/{name}")
+def delete_secret(name: str) -> dict:
+    if name not in secrets.NAMES:
+        raise HTTPException(404, "Unknown secret.")
+    secrets.delete_secret(name)
+    return get_settings()
+
+
 def _codex_status() -> dict:
-    """Detected only; reviewr doesn't use Codex for drafting yet."""
     try:
         proc = subprocess.run(["codex", "login", "status"], capture_output=True, text=True, timeout=10, check=False)
     except (FileNotFoundError, subprocess.TimeoutExpired):

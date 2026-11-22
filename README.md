@@ -37,9 +37,12 @@ to replied:
 5. **Fix.** Work happens in your checkout of the PR branch: a worktree of yours on the
    branch (or detached at the PR head), or one `reviewr` creates on the real branch if
    you have none. Your edits there are what `reviewr` sees. Agent items are drafted by
-   the Claude Agent SDK in a throwaway worktree (file tools only, no shell), checked,
-   and committed into your checkout touching only the patch's files. For your own
-   items you pick which changed files go into the commit.
+   Claude in a throwaway worktree, with file tools only (Anthropic's text editor tool
+   and file search; no shell), then checked and committed into your checkout touching
+   only the patch's files. If you have uncommitted edits to those files, they're set
+   aside, the patch is committed, and your edits are merged back on top; files where
+   they conflict keep conflict markers and are listed. For your own items you pick which
+   changed files go into the commit.
 6. **Respond.** Review the summary comment and every reply. Submitting pushes the
    commits to the PR branch (fast-forward only), posts all replies as one review,
    resolves fixed and already-done threads, and re-requests review from reviewers who
@@ -90,6 +93,53 @@ It follows the same steps:
    dismiss it. Re-runs ask for confirmation.
 4. **Finish.** Push the fix commits (with confirmation); CI runs again on GitHub.
 
+## Setting up a workspace
+
+When you open a PR for a repository `reviewr` hasn't set up, it starts with workspace
+setup instead of the Overview. Setup runs these steps, and runs the ones that don't
+depend on each other at the same time:
+
+1. **Clone.** Find a clone of the repo in the workspace folder (by its GitHub remote,
+   whatever the folder is called), or clone it to `~/Projects/<owner>/<repo>` with
+   `gh repo clone`. Change the folder in Settings → Workspace.
+2. **Fetch and check out.** Fetch the PR's base branch and head commit, and use your
+   checkout of the PR branch, or create a worktree for it. Your own checkout is never
+   switched.
+3. **Node and Python, in parallel.** Read the versions the repo asks for (`.nvmrc`,
+   `.node-version`, `.tool-versions`, `engines`, `.python-version`, `requires-python`)
+   and find a matching install from nvm, fnm, Volta, mise, asdf, Homebrew or uv. If
+   there's none, setup installs one with nvm, fnm, mise or uv when you have them.
+4. **Dependencies and checks.** Find each lockfile on the PR branch (npm, pnpm, Yarn,
+   Bun, uv, Poetry, or requirements files) and the checks its dependencies support
+   (ESLint, Jest, Vitest, Ruff, Black, pytest). Anything you've already configured for
+   the repo is kept.
+5. **Install, in parallel.** Install every dependency set from the branch's lockfiles.
+
+You can follow each step on the setup page; it keeps running if you leave the page.
+
+## Settings and guidance
+
+Everything is configured on the Settings page and saved in
+`~/.config/reviewr/settings.json`. The Anthropic API key and the Jira API token are
+saved in your macOS Keychain, not in a file.
+
+- **Claude sign-in.** Sign in with the `ant` CLI (`brew install anthropics/tap/ant`,
+  then the Sign in button), so there's no key to store, or save an API key.
+- **Codex.** Uses your `codex login`.
+- **Workspace.** The workspace folder, and for each repository its clone, the PATH
+  entries, dependency installs and checks that setup filled in.
+- **Guidance.** Instructions added to each AI step after `reviewr`'s built-in ones:
+  decision suggestions, reply drafts, planning, patch checks, the coding agent, merge
+  conflicts and CI failures. Write them for every repository or for one. A repository
+  can also commit guidance in `.reviewr/guidance/<step>.md` (or `all.md` for every
+  step). Coding steps read the repo's `CLAUDE.md` or `AGENTS.md`, and the coding agent
+  gets a list of the repo's `.claude/skills` and opens one when it applies.
+- **Jira and your editor.**
+
+If you used `reviewr.toml` and `.env` before, they're imported on the first start:
+the settings into `settings.json` (and `reviewr.toml` is renamed to
+`reviewr.toml.imported`), and the API key and Jira token into the Keychain.
+
 ## Install
 
 Download the `.dmg` from the latest release on the repo's Releases page and drag
@@ -108,13 +158,9 @@ The same files are in GitHub Packages as `ghcr.io/ebridges/reviewr:<version>` (a
 oras pull ghcr.io/ebridges/reviewr:latest
 ```
 
-The app includes its Python backend and the Claude Code CLI. It needs `git`, the `gh`
-CLI logged in, and a local clone of each repo you review. Its config is in
-`~/.config/reviewr/`:
-
-- `config.toml`, in the same format as `reviewr.toml.example`, with
-  `repos."owner/name".path` set for each clone.
-- `.env` with `ANTHROPIC_API_KEY=...`, unless you sign in with `ant auth login`.
+The app includes its Python backend. It needs `git` and the `gh` CLI logged in. On the
+first start, sign in to Claude under Settings; open a pull request and `reviewr` sets up
+its repository.
 
 To use the `reviewr` command (see [From the command line](#from-the-command-line)) with
 the installed app:
@@ -125,23 +171,14 @@ ln -s /Applications/reviewr.app/Contents/Resources/bin/reviewr ~/.local/bin/revi
 
 ## Running from source
 
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 22+, the `gh` CLI
-logged in, Claude Code installed (the Agent SDK uses it), and a local clone of each
-repo you review.
-
-```bash
-cp reviewr.toml.example reviewr.toml   # then set repos."owner/name".path
-```
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 22+ and the `gh`
+CLI logged in.
 
 Install everything (backend, frontend, desktop app) once:
 
 ```bash
 npm run setup
 ```
-
-Claude credentials: put `ANTHROPIC_API_KEY=...` in `.env` at the project root
-(gitignored), or sign in with `ant auth login`. The Settings page shows which source
-is in use.
 
 `reviewr` runs as a desktop app (Electron). From the project folder:
 
@@ -173,8 +210,8 @@ starting.
 
 The PR is found from the folder's github.com remotes (`upstream` first, for forks) and
 the branch's upstream name, and it must come from the repo the branch is pushed to. A
-linked worktree works the same as the main clone. If the repo has no entry in
-`reviewr.toml`, the command prints the lines to add.
+linked worktree works the same as the main clone. If `reviewr` doesn't know the repo
+yet, the clone you ran the command in becomes its clone.
 
 ```bash
 reviewr                            # the PR for the current folder's branch
@@ -184,7 +221,6 @@ reviewr open --no-launch           # print the PR without opening the app
 ```
 
 The command rebuilds the frontend first if its sources changed since the last build.
-`reviewr.toml` and `.env` in the project folder are found from any folder.
 
 For working on `reviewr` itself, with hot reload:
 
@@ -231,18 +267,15 @@ PR.
 ## Known limits
 
 - The agent itself has file tools only. Lint and tests run after it finishes, scoped to
-  the files the work item changes (configured per repo in `reviewr.toml`); end-to-end
-  suites are never run per item.
-- Checks use dependencies installed from the PR branch's own lockfiles (the `envs`
-  section in `reviewr.toml`), stored under `~/.local/share/reviewr/envs/`. Every worktree
+  the files the work item changes; end-to-end suites are never run per item.
+- Checks use dependencies installed from the PR branch's own lockfiles, stored under
+  `~/.local/share/reviewr/envs/`. Every worktree
   links to one shared install per set of lockfiles; a changed lockfile starts from a
   copy-on-write clone of the previous install and only applies the differences.
   Settings → Storage previews and runs a cleanup of installs no open PR needs and of
   worktrees for merged or closed PRs. Your clone's installed packages are never used
   or changed.
-- If you have uncommitted edits in `reviewr`'s worktree when you accept an agent patch,
-  the patch may not apply cleanly.
-- Editing settings (API key, editors, clones) happens in `.env` and `reviewr.toml`;
-  the Settings page shows status and instructions.
+- Workspace setup installs one `node_modules` per lockfile. In a monorepo, packages
+  that need their own `node_modules` aren't linked into worktrees, and Yarn Plug'n'Play
+  isn't supported.
 - The packaged app is built for Apple Silicon Macs only, and isn't signed or notarized.
-- The packaged app is large (the Claude Code CLI it includes is about 350 MB).

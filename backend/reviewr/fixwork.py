@@ -147,26 +147,27 @@ def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, path
         envs.unlink(links)
 
 
-def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str, message: str) -> tuple[str, list[str]]:
+def apply_patch_and_commit(cfg: Config, pr: PullRequest, work: Path, patch: str, message: str) -> tuple[str, list[str], list[str]]:
     """Apply an agent's patch to your checkout and commit only its files, with your
-    commit hooks. Refuses if those files have edits of yours. If the commit fails, the
-    files are put back as they were, so nothing is left half-applied. A patch that a
-    failed earlier attempt left staged is committed as it is."""
+    commit hooks. Uncommitted edits of yours to those files are set aside, then merged
+    back on top of the commit. If the commit fails, everything is put back as it was. A
+    patch that a failed earlier attempt left staged is committed as it is.
+
+    Returns the commit, the files the hooks changed, and the files where your edits
+    conflicted with the commit (they keep conflict markers)."""
     paths = git.patch_paths(patch)
-    already = git.staged_as(work, patch, paths)
-    if not already:
-        if dirty := git.dirty_paths(work, paths):
-            raise git.GitError(
-                "These files have uncommitted changes in your checkout, so the patch wasn't applied: "
-                + ", ".join(dirty) + ". Commit or stash them, then try again."
-            )
-        git.apply_index(work, patch)
-    try:
-        return commit_with_hooks(cfg, pr.ref.slug, work, message, paths)
-    except git.GitError:
-        if not already:
-            git.restore_paths(work, paths)
-        raise
+    if git.staged_as(work, patch, paths):
+        sha, fixed = commit_with_hooks(cfg, pr.ref.slug, work, message, paths)
+        return sha, fixed, []
+    fixed: list[str] = []
+
+    def commit(paths: list[str]) -> str:
+        sha, changed = commit_with_hooks(cfg, pr.ref.slug, work, message, paths)
+        fixed.extend(changed)
+        return sha
+
+    sha, conflicts = git.apply_and_commit(work, patch, message, commit=commit)
+    return sha, fixed, conflicts
 
 
 def is_created_by_reviewr(cfg: Config, pr: PullRequest, path: Path) -> bool:
@@ -217,7 +218,7 @@ def _draft_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, work: P
         state = store.get_state(pr.ref)
         item = state.item(item_id)
         git.create_draft_worktree(repo_cfg.path, draft, git.head_sha(work))
-        agent_log = run_agent(draft, prompt_for(pr, state, item), cfg.llm.model)
+        agent_log = run_agent(draft, prompt_for(pr, state, item), cfg.llm.model, pr.ref.slug)
         patch = git.working_diff(draft, exclude=envs.provided_paths(repo_cfg))
         thread_checks = check_patch(pr, item.thread_ids, patch, cfg.llm)
 
@@ -255,11 +256,11 @@ def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, messa
     item = store.get_state(pr.ref).item(item_id)
     if item.status != "ready" or not item.patch:
         raise ValueError("This work item has no drafted patch to accept.")
-    sha, _ = apply_patch_and_commit(cfg, pr, work, item.patch, message)
+    sha, _, conflicts = apply_patch_and_commit(cfg, pr, work, item.patch, message)
 
     def committed(s: ReviewState) -> None:
         it = s.item(item_id)
-        it.status, it.commit_sha = "committed", sha
+        it.status, it.commit_sha, it.edit_conflicts = "committed", sha, conflicts
 
     return store.update_state(pr.ref, committed)
 
@@ -277,7 +278,7 @@ def start_checks(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> No
     """Run checks in a throwaway worktree: on the agent's patch, or on a copy of your
     uncommitted changes (your own worktree and its .venv/node_modules are left alone)."""
     if not cfg.repos[pr.ref.slug].checks:
-        raise ValueError(f'No checks are configured for {pr.ref.slug}. Add [[repos."{pr.ref.slug}".checks]] to reviewr.toml.')
+        raise ValueError(f'No checks are set up for {pr.ref.slug}. Add them under Settings → Workspace, or run workspace setup to detect them.')
     work = work_worktree(cfg, pr)
     store.update_state(pr.ref, lambda s: setattr(s.item(item_id), "checks_running", True))
     _submit(pr, item_id, _checks_job, store, cfg, pr, item_id, work)
@@ -388,7 +389,7 @@ def _own_fix_job(store: Store, cfg: Config, pr: PullRequest, item_id: int, base:
         if patch.strip():
             git.apply_to_worktree(scratch, patch)
         git._git(scratch, "add", "-A")  # your changes become the baseline; the agent's are on top
-        output = run_agent(scratch, prompt, cfg.llm.model)
+        output = run_agent(scratch, prompt, cfg.llm.model, pr.ref.slug)
         diff = git.unstaged_diff(scratch, envs.provided_paths(repo_cfg))
 
         def done(s: ReviewState) -> None:

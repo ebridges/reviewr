@@ -67,7 +67,7 @@ def test_fix_is_proposed_then_committed(setup, monkeypatch):  # noqa: F811
                                    failures={"2": failure}, order=["2"]))
     import reviewr.agent
 
-    def agent(worktree, prompt, model):
+    def agent(worktree, prompt, model, slug=None):
         assert "bad quotes" in prompt and "build" in prompt
         p = Path(worktree) / "app.py"
         p.write_text(p.read_text().replace("'", '"'))

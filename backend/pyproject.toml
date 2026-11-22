@@ -5,9 +5,9 @@ description = "Review and respond to comments on very large pull requests"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.70",
-    "claude-agent-sdk>=0.2.183",
     "fastapi>=0.115",
     "httpx>=0.27",
+    "keyring>=25",
     "pydantic>=2.8",
     "uvicorn>=0.30",
 ]

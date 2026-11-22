@@ -88,9 +88,9 @@ def _clean(proposal: str | None) -> str | None:
     return proposal if proposal.endswith("\n") or not proposal else proposal + "\n"
 
 
-def _batch(s: MergeSession, conflicts: list[Conflict], cfg: LLMConfig, pr_title: str) -> dict[str, dict]:
+def _batch(s: MergeSession, conflicts: list[Conflict], cfg: LLMConfig, pr_title: str, slug: str | None) -> dict[str, dict]:
     user = f"PR: {pr_title}\nBranch: {s.head_ref}, being updated from {s.base_ref}\n\n" + "\n\n".join(render(s, c) for c in conflicts)
-    result = structured(cfg, SYSTEM, user, _Result)
+    result = structured(cfg, SYSTEM, user, _Result, step="conflicts", slug=slug)
     known = {c.id for c in conflicts}
     out: dict[str, dict] = {}
     for item in result.conflicts:
@@ -106,14 +106,14 @@ def _batch(s: MergeSession, conflicts: list[Conflict], cfg: LLMConfig, pr_title:
     return out
 
 
-def analyze(cfg: LLMConfig, pr_title: str):
+def analyze(cfg: LLMConfig, pr_title: str, slug: str | None = None):
     """A function merge.start can call with (session, conflicts), in batches."""
 
     def run(s: MergeSession, conflicts: list[Conflict]) -> dict[str, dict]:
         batches = [conflicts[i : i + BATCH] for i in range(0, len(conflicts), BATCH)]
         out: dict[str, dict] = {}
         with ThreadPoolExecutor(max_workers=3) as pool:
-            for part in pool.map(lambda b: _batch(s, b, cfg, pr_title), batches):
+            for part in pool.map(lambda b: _batch(s, b, cfg, pr_title, slug), batches):
                 out.update(part)
         return out
 
@@ -132,11 +132,11 @@ the author's instructions if any. No conflict markers. Use the file's indentatio
 with a newline."""
 
 
-def propose(cfg: LLMConfig, s: MergeSession, c: Conflict, instruction: str) -> dict:
+def propose(cfg: LLMConfig, s: MergeSession, c: Conflict, instruction: str, slug: str | None = None) -> dict:
     user = render(s, c)
     if instruction.strip():
         user += f"\n\n<author_instructions>\n{instruction.strip()}\n</author_instructions>"
-    r = structured(cfg, PROPOSE_SYSTEM, user, _Proposal, max_tokens=16000)
+    r = structured(cfg, PROPOSE_SYSTEM, user, _Proposal, max_tokens=16000, step="conflicts", slug=slug)
     proposal = _clean(r.proposal)
     if proposal is None:
         raise ValueError("The proposal still contained conflict markers.")

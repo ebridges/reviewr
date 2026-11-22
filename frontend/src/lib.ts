@@ -55,12 +55,13 @@ export function useRoute(): Route {
 
 /** The PR and its review state, with a helper to apply state returned by a mutation.
  *  Polls every 3 seconds while an agent is drafting, to pick up its result. */
-export function usePR(ref: PRRef) {
+export function usePR(ref: PRRef, enabled = true) {
   const qc = useQueryClient();
   const key = ["pr", ref.owner, ref.repo, ref.number];
   const q = useQuery({
     queryKey: key,
     queryFn: () => api.pr(ref),
+    enabled,
     refetchInterval: (query) =>
       query.state.data?.state.plan.some((w) => w.status === "drafting" || w.checks_running || w.proposed_fix?.status === "running") ? 3000 : false,
   });

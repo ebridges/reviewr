@@ -7,6 +7,7 @@ import { KeyHelp } from "../components/KeyHelp";
 import { ProposedFix } from "../components/ProposedFix";
 import { prHref, useAIName } from "../lib";
 import { GitHubCommits, type WorkflowStep } from "./Merge";
+import { EditConflicts } from "../components/EditConflicts";
 
 // Fix CI: Start → Triage → Fix → Finish, like the other two workflows.
 
@@ -348,6 +349,7 @@ function FailureCard({ prRef, f, onNav }: { prRef: PRRef; f: CIFailure; onNav: (
           <button className="link small" onClick={() => mark.mutate("open")}>Reopen</button>
         </p>
       )}
+      {f.status === "fixed" && <EditConflicts files={f.edit_conflicts} />}
       {f.status === "rerun" && <p className="small">Re-run requested on GitHub. <button className="link small" onClick={() => mark.mutate("open")}>Reopen</button></p>}
       {f.status === "dismissed" && <p className="small">Dismissed. <button className="link small" onClick={() => mark.mutate("open")}>Reopen</button></p>}
 

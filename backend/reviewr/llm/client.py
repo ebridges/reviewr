@@ -13,8 +13,9 @@ from typing import Any, TypeVar
 import anthropic
 from pydantic import BaseModel, ValidationError
 
-from reviewr import ai
+from reviewr import ai, secrets
 from reviewr.config import LLMConfig, load_config
+from reviewr.guidance import with_guidance
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -25,8 +26,11 @@ class LLMError(RuntimeError):
     pass
 
 
-def structured(cfg: LLMConfig, system: str, user: str, schema: type[T], max_tokens: int = 32000) -> T:
-    """Ask the current provider for output matching `schema`."""
+def structured(cfg: LLMConfig, system: str, user: str, schema: type[T], max_tokens: int = 32000,
+               *, step: str, slug: str | None = None) -> T:
+    """Ask the current provider for output matching `schema`. `step` and `slug` pick the
+    guidance added to the system prompt (see guidance.py)."""
+    system = with_guidance(system, step, slug)
     if ai.current() == "codex":
         return _codex(system, user, schema)
     return _claude(cfg, system, user, schema, max_tokens)
@@ -34,16 +38,28 @@ def structured(cfg: LLMConfig, system: str, user: str, schema: type[T], max_toke
 
 # Claude
 
-@lru_cache
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic()
+def anthropic_client() -> anthropic.Anthropic:
+    """A client signed in the way Settings says: with the `ant auth login` profile (or
+    ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from the environment, which the SDK
+    prefers), or with the API key saved in the Keychain."""
+    if load_config().ai.claude_auth == "api_key":
+        key = secrets.get_secret(secrets.ANTHROPIC_API_KEY)
+        if not key:
+            raise LLMError("No Anthropic API key is saved. Add one under Settings → AI, or sign in with the ant CLI instead.")
+        return _client_for(key)
+    return _client_for(None)
+
+
+@lru_cache(maxsize=4)
+def _client_for(api_key: str | None) -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
 
 
 def _claude(cfg: LLMConfig, system: str, user: str, schema: type[T], max_tokens: int) -> T:
     """Streamed because the SDK refuses non-streaming requests with a large max_tokens.
     If a safety classifier declines, the API retries on a fallback model inside the
     same call instead of returning a refusal."""
-    with _client().beta.messages.stream(
+    with anthropic_client().beta.messages.stream(
         model=cfg.model,
         max_tokens=max_tokens,
         system=system,

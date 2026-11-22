@@ -47,11 +47,10 @@ def main() -> None:
 
 def _open(target: str, launch: bool) -> int:
     from reviewr import launch as launcher
-    from reviewr.config import load_config, load_dotenv
+    from reviewr.config import RepoConfig, load_config, update_config
     from reviewr.github.client import GitHubClient, GitHubError
     from reviewr.models import PRRef
 
-    load_dotenv()
     checkout = None
     try:
         ref, title = PRRef.parse(target), None
@@ -86,11 +85,12 @@ def _open(target: str, launch: bool) -> int:
     if ref:
         print(f"{ref.key}: {title}" if title else ref.key)
         if ref.slug not in load_config().repos:
-            clone = checkout.clone if checkout else Path("~/path/to/clone")
-            print(
-                f"\nreviewr.toml has no clone for {ref.slug}, so the app can't show diffs or fix "
-                f'anything yet. Add:\n\n[repos."{ref.slug}"]\npath = "{clone}"'
-            )
+            if checkout is not None:
+                # You ran this in a clone of the repo: use it.
+                update_config(lambda c: c.repos.__setitem__(ref.slug, RepoConfig(path=checkout.clone)))
+                print(f"Using {checkout.clone} as reviewr's clone of {ref.slug}.")
+            else:
+                print(f"{ref.slug} isn't set up in reviewr yet; the app starts with workspace setup.")
     if launch:
         try:
             launcher.launch_app(launcher.pr_route(ref) if ref else None)

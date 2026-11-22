@@ -8,6 +8,7 @@ import { DiffView } from "../components/Code";
 import { Markdown } from "../components/Markdown";
 import { prHref, storageGet, threadTitle, where } from "../lib";
 import { itemStatus } from "./Plan";
+import { EditConflicts } from "../components/EditConflicts";
 
 export function Fix({ ctx, arg }: { ctx: PRContext; arg?: string }) {
   const { pr, state } = ctx.data!;
@@ -175,7 +176,7 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
           </>
         )}
         {item.status === "committed" && (
-          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p></div>
+          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p><EditConflicts files={item.edit_conflicts} /></div>
         )}
         {(item.status === "ready" || item.status === "committed") && item.patch && (
           <div className="card flush">
@@ -329,7 +330,7 @@ function OwnItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
       <ThreadChecks ctx={ctx} item={item} subtitle="Use “Check against threads” after you make changes." />
       <section className="stack min0">
         {item.status === "committed" ? (
-          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p></div>
+          <div className="card"><p>Committed as <span className="mono">{item.commit_sha?.slice(0, 7)}</span>. It will be pushed from Respond.</p><EditConflicts files={item.edit_conflicts} /></div>
         ) : (
           <>
             {fix && (

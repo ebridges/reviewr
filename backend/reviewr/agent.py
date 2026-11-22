@@ -1,29 +1,30 @@
 """Run a coding agent in a draft worktree to make a work item's changes.
 
-Claude: the Claude Agent SDK, with file tools only (no shell).
+Claude: an agent loop over the Messages API with file tools only (agent_tools.py: the
+text editor tool plus find and search, all confined to the worktree; no shell).
 Codex: `codex exec` in its workspace-write sandbox, which confines writes to the
 worktree and has no network access; unlike the Claude setup it can run commands there.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
+import logging
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
+import anthropic
 
 from reviewr import ai
+from reviewr.agent_tools import TOOLS, ToolError, Workspace
 from reviewr.config import load_config
+from reviewr.guidance import with_guidance
 from reviewr.models import PullRequest
 from reviewr.state import ReviewState, WorkItem
 
-# File tools only: the agent reads and edits code in its own worktree, but can't run
-# commands, so it can't push, install packages, or touch anything outside it.
-TOOLS = ["Read", "Edit", "Write", "Glob", "Grep"]
-
+log = logging.getLogger(__name__)
 
 class AgentError(RuntimeError):
     pass
@@ -93,23 +94,67 @@ def prompt_for(pr: PullRequest, state: ReviewState, item: WorkItem) -> str:
     return item.prompt or agent_prompt(pr, state, item)
 
 
-async def _run(worktree: Path, prompt: str, model: str) -> str:
-    log: list[str] = []
-    options = ClaudeAgentOptions(
-        cwd=str(worktree),
-        tools=TOOLS,
-        allowed_tools=TOOLS,
-        permission_mode="acceptEdits",
-        model=model,
-        max_turns=80,
-        setting_sources=["project"],  # pick up the repo's CLAUDE.md conventions
-    )
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            log.extend(b.text for b in message.content if isinstance(b, TextBlock))
-        elif isinstance(message, ResultMessage) and message.is_error:
-            raise AgentError(message.result or f"Agent stopped: {message.subtype}")
-    return "\n\n".join(log)
+SYSTEM = """You are a careful software engineer making changes in a git repository to address
+code review comments. The repository is checked out at the PR's branch; paths are relative to
+its root.
+
+You have file tools only: view and edit files with the text editor tool, list files with
+find_files, and search their contents with search. You can't run commands, tests or builds.
+Look at the relevant code before you change it. When you're done, stop calling tools and reply
+with one short paragraph saying what you changed and anything you weren't sure about."""
+
+MAX_TURNS = 80
+
+
+def _run_claude(worktree: Path, prompt: str, model: str, slug: str | None) -> str:
+    from reviewr.llm.client import LLMError, anthropic_client
+
+    cfg = load_config()
+    try:
+        client = anthropic_client()
+    except LLMError as e:
+        raise AgentError(str(e)) from e
+    ws = Workspace(worktree)
+    system = with_guidance(SYSTEM, "agent", slug, root=worktree)
+    messages: list = [{"role": "user", "content": prompt}]
+    notes: list[str] = []
+    for _turn in range(MAX_TURNS):
+        try:
+            with client.beta.messages.stream(
+                model=model,
+                max_tokens=64000,
+                system=system,
+                tools=TOOLS,
+                messages=messages,
+                cache_control={"type": "ephemeral"},
+                output_config={"effort": cfg.llm.effort},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            ) as stream:
+                response = stream.get_final_message()
+        except anthropic.APIError as e:
+            raise AgentError(f"The Claude API returned an error: {e}") from e
+        # Keep the whole content (thinking and tool calls included), as the API requires.
+        messages.append({"role": "assistant", "content": response.content})
+        notes.extend(b.text for b in response.content if b.type == "text" and b.text.strip())
+        if response.stop_reason == "refusal":
+            raise AgentError("Claude declined to make this change.")
+        if response.stop_reason == "max_tokens":
+            raise AgentError("Claude's reply was cut off (max_tokens). Try a smaller work item.")
+        calls = [b for b in response.content if b.type == "tool_use"]
+        if not calls:
+            return "\n\n".join(notes)
+        results = []
+        for call in calls:
+            try:
+                out, is_error = ws.run(call.name, call.input if isinstance(call.input, dict) else json.loads(call.input)), False
+            except ToolError as e:
+                out, is_error = str(e), True
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                out, is_error = f"The tool failed: {e}", True
+            results.append({"type": "tool_result", "tool_use_id": call.id, "content": out, "is_error": is_error})
+        messages.append({"role": "user", "content": results})  # all results in one message
+    raise AgentError(f"The agent didn't finish within {MAX_TURNS} turns. Try a smaller work item.")
 
 
 CODEX_TIMEOUT_S = 1800
@@ -135,8 +180,9 @@ def _run_codex(worktree: Path, prompt: str) -> str:
         return last.read_text() if last.exists() else ""
 
 
-def run_agent(worktree: Path, prompt: str, model: str) -> str:
-    """Draft changes in `worktree` with the current provider. `model` is the Claude model."""
+def run_agent(worktree: Path, prompt: str, model: str, slug: str | None = None) -> str:
+    """Draft changes in `worktree` with the current provider. `model` is the Claude model;
+    `slug` picks the repo's guidance."""
     if ai.current() == "codex":
-        return _run_codex(worktree, prompt)
-    return asyncio.run(_run(worktree, prompt, model))
+        return _run_codex(worktree, with_guidance(prompt, "agent", slug, root=worktree))
+    return _run_claude(worktree, prompt, model, slug)

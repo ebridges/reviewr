@@ -239,7 +239,7 @@ def _wait(cfg, pr, done):
 def _fake_agent(monkeypatch, edit):
     import reviewr.agent
 
-    def run(worktree, prompt, model):
+    def run(worktree, prompt, model, slug=None):
         assert "lint: bad quotes" in prompt and "app.py" in prompt
         edit(Path(worktree))
         return "Changed the quotes in app.py."
@@ -291,7 +291,7 @@ def test_own_fix_proposed_then_applied(setup, monkeypatch, tmp_path):
 
     import reviewr.agent
 
-    def agent(worktree, prompt, model):
+    def agent(worktree, prompt, model, slug=None):
         assert "lint: quotes" in prompt and "Say hello" in prompt
         p = Path(worktree) / "app.py"
         assert "MSG = 'hi'" in p.read_text()  # your edit is there for the agent

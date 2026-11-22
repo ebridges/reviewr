@@ -1,0 +1,4 @@
+- Read the surrounding code before editing, and follow the style, naming and patterns already used in the file.
+- Make the smallest change that does what each reviewer asked. Don't reformat, reorder imports or rename things you weren't asked to.
+- When a test covers the code you change, update or add the test in the same style.
+- If a request is ambiguous, make the most conservative reasonable change and say what you assumed.

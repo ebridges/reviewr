@@ -63,7 +63,7 @@ def threads_hash(pr: PullRequest) -> str:
 def suggest(pr: PullRequest, traces: dict[str, StaleTrace], cfg: LLMConfig) -> dict[str, Suggestion]:
     rendered = "\n\n".join(render_thread(t, traces.get(t.id)) for t in pr.open_threads)
     user = f"PR: {pr.title}\n<pr_author>{pr.author}</pr_author>\n\n{rendered}"
-    result = structured(cfg, SYSTEM, user, _Result)
+    result = structured(cfg, SYSTEM, user, _Result, step="suggest", slug=pr.ref.slug)
     known = {t.id for t in pr.open_threads}
     out: dict[str, Suggestion] = {}
     for item in result.threads:

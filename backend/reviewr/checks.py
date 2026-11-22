@@ -183,7 +183,7 @@ def _one(
         if len(tests) > check.max_tests:
             return base.model_copy(update={
                 "reason": f"{len(tests)} test files relate to these files, more than the limit of {check.max_tests} "
-                          "(max_tests in reviewr.toml). That's close to a full run; leave it to CI.",
+                          "(max_tests in the check's settings). That's close to a full run; leave it to CI.",
                 "files": files, "tests": tests,
             })
     elif not files:

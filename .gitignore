@@ -14,3 +14,6 @@ backend/build/
 desktop/release/
 # App icon files; overrides a global ignore of build/.
 !desktop/build/
+# Emacs lock files (left while a file has unsaved edits).
+.#*
+reviewr.toml.imported

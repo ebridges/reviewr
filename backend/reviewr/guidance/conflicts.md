@@ -1,0 +1,2 @@
+- When both sides changed the same lines for different reasons, keep both intents.
+- Prefer the base branch's version of renames, moved code and API changes, and re-apply this PR's change on top of it.

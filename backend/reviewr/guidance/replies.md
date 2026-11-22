@@ -1,0 +1,3 @@
+- Match the tone of the thread: brief and factual with peers, a little more explanatory with someone new to the code.
+- Don't restate the reviewer's comment.
+- Use code formatting for identifiers, file names and commands.

@@ -1,0 +1,2 @@
+- Treat timeouts, network errors, runner failures and known-flaky tests as re-run candidates unless the log points at this PR's changes.
+- A failure in a file this PR doesn't touch is usually not this PR's, unless the PR changes something it depends on.
