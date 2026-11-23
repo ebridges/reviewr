@@ -3,6 +3,7 @@ import { api, type CISession, type MergeSession, type PRView } from "../api";
 import { prHref, useAIName } from "../lib";
 import { ciKey } from "../pages/CI";
 import { mergeKey } from "../pages/Merge";
+import { useRun } from "../pages/Run";
 import { Spinner } from "./Spinner";
 
 const mergeBusy = (s?: MergeSession | null) => !!s && (s.status === "analyzing" || s.checks_running || s.fix?.status === "running");
@@ -39,6 +40,9 @@ export function WorkingBar({ view }: { view: PRView }) {
   for (const f of Object.values(c?.failures ?? {})) {
     if (f.fix?.status === "running") tasks.push({ label: `${f.fix.ai_name} is fixing CI: ${f.title || f.name}`, href: prHref(ref, "ci", `fix/${encodeURIComponent(f.id)}`) });
   }
+  const r = useRun(ref).data?.session;
+  if (r?.status === "starting") tasks.push({ label: "Starting the app", href: prHref(ref, "run") });
+  if (r?.status === "stopping") tasks.push({ label: "Stopping the app", href: prHref(ref, "run") });
   if (!tasks.length) return null;
   return (
     <div className="working-bar" role="status" aria-live="polite">

@@ -4,6 +4,7 @@ import { api, type PRView } from "./api";
 import { prHref, usePR, useRoute, type Route } from "./lib";
 import { CI } from "./pages/CI";
 import { Fix } from "./pages/Fix";
+import { Run } from "./pages/Run";
 import { Merge } from "./pages/Merge";
 import { Overview } from "./pages/Overview";
 import { Plan } from "./pages/Plan";
@@ -67,6 +68,7 @@ function PRPages({ route }: { route: Route }) {
           {route.page === "respond" && <Respond ctx={pr} />}
           {route.page === "merge" && <Merge ctx={pr} arg={route.arg} />}
           {route.page === "ci" && <CI ctx={pr} arg={route.arg} />}
+          {route.page === "run" && <Run ctx={pr} />}
           <NextStep route={route} view={pr.data} />
         </>
       )}
