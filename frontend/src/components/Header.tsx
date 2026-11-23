@@ -6,6 +6,7 @@ import { mergeStatus, mergeSteps, useBranchStatus, type WorkflowStep } from "../
 import { AISwitch } from "./AISwitch";
 import { BrandIcon } from "./Brand";
 import { WorkingBar } from "./WorkingBar";
+import { RunButton } from "../pages/Run";
 import { WorkspaceMenu } from "./WorkspacePanel";
 
 export const STEPS = [
@@ -38,6 +39,7 @@ export function Header({ route, view }: { route: Route; view?: PRView }) {
         </a>
       )}
       {pr && <WorkspaceMenu prRef={pr.ref} headRef={pr.head_ref} />}
+      {pr && <RunButton prRef={pr.ref} on={route.page === "run"} />}
       <span className="spacer" />
       <AISwitch />
       {route.ref && <WorkflowTracker route={route} counts={counts} base={pr?.base_ref ?? "main"} />}

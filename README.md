@@ -95,6 +95,37 @@ It follows the same steps:
    dismiss it. Re-runs ask for confirmation.
 4. **Finish.** Push the fix commits (with confirmation); CI runs again on GitHub.
 
+## Running the PR's app
+
+**Run** in the header starts the app at the PR's branch, so you can try the change
+before you review or merge it.
+
+- **What runs.** Either the PR as it is on GitHub, in a separate worktree reviewr keeps
+  for this, so your checkout isn't touched; or your checkout, with your unpushed
+  commits and uncommitted edits.
+- **How it runs.** The first time, reviewr reads the branch and proposes:
+  - services, from `.claude/launch.json`, a `Procfile`, or each package's `dev`/`start` script
+  - a Docker Compose file
+  - env files to copy from your clone (such as `.env`, only when git ignores them)
+  - setup commands such as migrations and seed scripts
+
+  You review and save the proposal; it's kept per repository and editable on the Run
+  page or in Settings. Nothing runs from a guess.
+- **Starting.** Dependencies come from the branch's lockfiles, as for checks. Compose
+  runs under its own project name, then the setup commands run, then each service. A
+  service is ready when its port answers. The page shows each step, each service's
+  status and log, and the URL to open. Stop ends every process the run started, and
+  brings Compose down. Quitting reviewr does the same.
+- **Databases.** Setup commands run the PR's migrations, so before they run reviewr
+  checks which database they would use: `*DATABASE_URL*`, database `*_URL`s and
+  `*DB*_HOST` variables, from your env files, reviewr's environment and the run's
+  env overrides. Unless all of them are local (localhost, a Unix socket, SQLite, or a
+  Compose service), it asks first: run the setup anyway, or start without it. To run
+  it safely every time, set env overrides in the run config that point the app at
+  its own database, for example the one Compose starts.
+- **Someone else's PR.** Running a PR you didn't author runs its code on your machine.
+  The first start shows a warning naming the author.
+
 ## Setting up a workspace
 
 When you open a PR for a repository `reviewr` hasn't set up, it starts with workspace

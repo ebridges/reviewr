@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +24,7 @@ from reviewr import (
     ai,
     ci,
     cleanup,
+    detect,
     envs,
     fixwork,
     git,
@@ -32,8 +35,17 @@ from reviewr import (
     submit,
     workspace,
 )
+from reviewr import run as app_run
 from reviewr.agent import agent_prompt
-from reviewr.config import GUIDANCE_STEPS, Config, load_config, save_config, settings_path
+from reviewr.config import (
+    GUIDANCE_STEPS,
+    Config,
+    RunConfig,
+    load_config,
+    save_config,
+    settings_path,
+    update_config,
+)
 from reviewr.editor import EditorError, open_in_editor
 from reviewr.github import GitHubClient, GitHubError, fetch_pull_request
 from reviewr.github.fetch import PR_LISTS, close_pull_request, list_pull_requests, set_draft
@@ -52,7 +64,15 @@ from reviewr.store import Store
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
-app = FastAPI(title="reviewr")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    # Apps started from the Run page don't outlive reviewr.
+    app_run.stop_all()
+
+
+app = FastAPI(title="reviewr", lifespan=_lifespan)
+atexit.register(app_run.stop_all)
 
 # D4: a refresh within this window returns the cached copy instead of calling GitHub.
 MIN_REFRESH_INTERVAL = timedelta(seconds=30)
@@ -439,6 +459,84 @@ def post_setup(owner: str, repo: str, number: int) -> dict:
     cfg = load_config()
     workspace.start(cfg, _load_pr(ref))
     return workspace.view(cfg, ref)
+
+
+# Run the PR's app (run.py)
+
+def _run_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except app_run.SetupNeedsConfirm as e:
+        raise HTTPException(409, {
+            "code": "setup_needs_confirm", "message": str(e), "commands": e.commands,
+            "databases": [d.model_dump() for d in e.databases],
+        }) from e
+    except app_run.RunError as e:
+        raise HTTPException(409, str(e)) from e
+    except git.GitError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+def _run_suggestion(cfg: Config, pr: PullRequest) -> dict:
+    """detect_run's proposal from the files at the PR head."""
+    clone = cfg.repo_path(pr.ref.slug)
+    git.ensure_commits(clone, pr.head_oid)
+    files = subprocess.run(["git", "-C", str(clone), "ls-tree", "-r", "--name-only", pr.head_oid],
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    found, notes = detect.detect_run(files, envs.commit_reader(clone, pr.head_oid))
+    return {"config": found.model_dump(), "notes": notes}
+
+
+@app.get(PR + "/run")
+def get_run(owner: str, repo: str, number: int, detect_config: bool = False) -> dict:
+    """The PR's app run, the repo's saved way to run it, and (when none is saved, or
+    asked for) a proposal detected from the PR branch."""
+    cfg, pr = _pr_cfg(owner, repo, number)
+    saved = cfg.repos[pr.ref.slug].run
+    out = {**app_run.view(cfg, pr), "config": saved.model_dump() if saved else None, "suggestion": None}
+    if saved is None or detect_config:
+        out["suggestion"] = _run_call(_run_suggestion, cfg, pr)
+    return out
+
+
+@app.put(PR + "/run/config")
+def put_run_config(owner: str, repo: str, number: int, req: RunConfig) -> dict:
+    """Save how to run this PR's repository (the same setting Settings edits)."""
+    ref = _ref(owner, repo, number)
+    _repo_path(ref)
+    update_config(lambda c: setattr(c.repos[ref.slug], "run", req))
+    return get_run(owner, repo, number)
+
+
+class RunStartRequest(BaseModel):
+    target: Literal["github", "checkout"] = "github"
+    # ask: refuse (409 setup_needs_confirm) if setup commands might change a database that
+    # isn't local; run: run them anyway; skip: don't run them this time.
+    setup: Literal["ask", "run", "skip"] = "ask"
+
+
+@app.post(PR + "/run/start")
+def post_run_start(owner: str, repo: str, number: int, req: RunStartRequest) -> dict:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    _run_call(app_run.start, cfg, pr, req.target, req.setup)
+    return get_run(owner, repo, number)
+
+
+class RunStopRequest(BaseModel):
+    remove_data: bool = False  # docker compose down -v
+
+
+@app.post(PR + "/run/stop")
+def post_run_stop(owner: str, repo: str, number: int, req: RunStopRequest | None = None) -> dict:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    _run_call(app_run.stop, cfg, pr, bool(req and req.remove_data))
+    return get_run(owner, repo, number)
+
+
+@app.get(PR + "/run/logs/{service}")
+def get_run_log(owner: str, repo: str, number: int, service: str, limit: int = 40000) -> dict:
+    cfg, pr = _pr_cfg(owner, repo, number)
+    return {"text": _run_call(app_run.read_log, cfg, pr, service, min(limit, 400000))}
 
 
 @app.get(PR + "/work")

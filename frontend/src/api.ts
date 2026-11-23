@@ -173,6 +173,45 @@ export interface EnvConfigData {
 export interface RepoConfigData {
   path: string; envs: EnvConfigData[]; path_prepend: string[]; exclude_tests: string[];
   checks: CheckConfigData[]; toolchain: Record<string, string>; guidance: Record<string, string>;
+  run: RunConfigData | null;
+}
+
+// Running the PR's app (backend/reviewr/run.py, config.RunConfig)
+export interface ServiceConfigData {
+  name: string; cwd: string; run: string[]; env: Record<string, string>; port: number | null; url_path: string; open: boolean;
+}
+export interface SetupCommandData { name: string; cwd: string; run: string[]; timeout: number }
+export interface RunConfigData {
+  env_files: string[]; env: Record<string, string>; compose: { file: string; services: string[] } | null;
+  setup: SetupCommandData[]; services: ServiceConfigData[]; ready_timeout: number;
+}
+export type RunTarget = "github" | "checkout";
+export interface RunService {
+  name: string; status: "starting" | "running" | "exited" | "stopped"; pid: number | null; port: number | null;
+  url: string | null; open: boolean; log_path: string; exit_code: number | null; note: string | null;
+}
+export interface RunSession {
+  slug: string; number: number; target: RunTarget; worktree: string; head_sha: string; started_at: string;
+  status: "starting" | "running" | "stopping" | "stopped" | "failed"; error: string | null;
+  steps: SetupStep[]; services: RunService[]; compose_project: string | null; setup_skipped: boolean;
+}
+export interface RunView {
+  session: RunSession | null;
+  head_moved: boolean;
+  config: RunConfigData | null;
+  suggestion: { config: RunConfigData; notes: string[] } | null;
+}
+/** Starting would run setup commands against a database that isn't (or might not be)
+ *  local (backend: run.SetupNeedsConfirm). */
+export interface SetupNeedsConfirm {
+  code: "setup_needs_confirm";
+  message: string;
+  commands: string[];
+  databases: { var: string; host: string; local: boolean }[];
+}
+export function setupNeedsConfirm(err: unknown): SetupNeedsConfirm | null {
+  const d = err instanceof ApiError ? err.detail : null;
+  return d && typeof d === "object" && (d as { code?: string }).code === "setup_needs_confirm" ? (d as SetupNeedsConfirm) : null;
 }
 export interface ConfigData {
   default_editor: string;
@@ -446,6 +485,12 @@ export const api = {
   claudeLogin: () => call<Settings["claude"]>("/api/settings/claude/login", send("POST")),
   setup: (r: PRRef) => call<SetupView>(`${base(r)}/setup`),
   startSetup: (r: PRRef) => call<SetupView>(`${base(r)}/setup`, send("POST")),
+  run: (r: PRRef, detect = false) => call<RunView>(`${base(r)}/run?detect_config=${detect}`),
+  runSaveConfig: (r: PRRef, config: RunConfigData) => call<RunView>(`${base(r)}/run/config`, send("PUT", config)),
+  runStart: (r: PRRef, target: RunTarget, setup: "ask" | "run" | "skip" = "ask") =>
+    call<RunView>(`${base(r)}/run/start`, send("POST", { target, setup })),
+  runStop: (r: PRRef, removeData = false) => call<RunView>(`${base(r)}/run/stop`, send("POST", { remove_data: removeData })),
+  runLog: (r: PRRef, service: string) => call<{ text: string }>(`${base(r)}/run/logs/${encodeURIComponent(service)}`),
   mergeRemote: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote`),
   mergeRemoteSync: (r: PRRef) => call<RemoteStatus>(`${base(r)}/merge/remote/sync`, send("POST", { confirm: true })),
   ciStatus: (r: PRRef, fresh = false) => call<CIStatus>(`${base(r)}/ci/status?fresh=${fresh}`),

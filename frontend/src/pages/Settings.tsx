@@ -370,6 +370,21 @@ function RepoCard({ slug, repo, steps, onChange, onRemove }: {
         </div>
       </details>
       <details>
+        <summary className="small">Running the app{repo.run ? `: ${repo.run.services.map((s) => s.name).join(", ")}` : " (not set up)"}</summary>
+        <div className="stack-gap details-body">
+          <p className="muted small">
+            Used by Run on a pull request: services, Docker Compose, setup commands (migrations, seed), env files copied from your clone, and
+            env overrides set for all of them. Open Run on one of this repository's PRs to have reviewr propose these from the branch.
+          </p>
+          {repo.run ? (
+            <>
+              <JsonField label="Run" value={repo.run} onChange={(run) => set({ run })} />
+              <div><button className="link small" onClick={() => { if (confirm("Remove how to run this repository?")) set({ run: null }); }}>Remove</button></div>
+            </>
+          ) : null}
+        </div>
+      </details>
+      <details>
         <summary className="small">Guidance for this repository</summary>
         <div className="stack-gap details-body">
           {Object.entries(steps).map(([step, g]) => (
