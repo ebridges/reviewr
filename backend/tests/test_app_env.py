@@ -1,10 +1,11 @@
 """The app's environment when started from Finder, editor lookup, signing failures, and
 applying a draft without committing it."""
 
+from pathlib import Path
 
 import pytest
 
-from reviewr import shellenv
+from reviewr import editor, shellenv
 
 
 def test_merge_takes_the_shells_values_but_keeps_ours():
@@ -40,3 +41,17 @@ def test_read_login_env_gives_up_quietly(tmp_path):
 def test_adopt_only_when_started_by_the_app(monkeypatch):
     monkeypatch.delenv("REVIEWR_GUI", raising=False)
     assert shellenv.adopt_login_env() == []
+
+
+def test_editor_found_inside_its_app_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    code = tmp_path / "Visual Studio Code.app/Contents/Resources/app/bin/code"
+    code.parent.mkdir(parents=True)
+    code.write_text("#!/bin/sh\n")
+    code.chmod(0o755)
+    assert editor.find_command("code", [tmp_path]) == str(code)
+    assert editor.find_command("nano-but-not-installed", [tmp_path]) is None
+
+
+def test_bundled_paths_are_relative():
+    assert all(not Path(p).is_absolute() for paths in editor._BUNDLED.values() for p in paths)
