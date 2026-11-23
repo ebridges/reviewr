@@ -1,11 +1,14 @@
 """The app's environment when started from Finder, editor lookup, signing failures, and
 applying a draft without committing it."""
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from reviewr import editor, shellenv
+from reviewr import editor, fixwork, git, shellenv
+from tests.test_merge import setup, sh  # noqa: F401  (setup is a fixture)
 
 
 def test_merge_takes_the_shells_values_but_keeps_ours():
@@ -51,6 +54,52 @@ def test_editor_found_inside_its_app_bundle(tmp_path, monkeypatch):
     code.chmod(0o755)
     assert editor.find_command("code", [tmp_path]) == str(code)
     assert editor.find_command("nano-but-not-installed", [tmp_path]) is None
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
+def test_signing_failure_is_not_blamed_on_the_hooks(setup, monkeypatch, tmp_path):  # noqa: F811
+    cfg, pr, clone = setup
+    key = tmp_path / "signing"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    sh(clone, "config", "commit.gpgsign", "true")
+    sh(clone, "config", "gpg.format", "ssh")
+    sh(clone, "config", "user.signingkey", (tmp_path / "signing.pub").read_text().strip())
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "no-agent.sock"))  # what a Finder-started app had
+    (clone / "app.py").write_text((clone / "app.py").read_text() + "X = 2\n")
+    sh(clone, "add", "app.py")
+    head = sh(clone, "rev-parse", "HEAD")
+    with pytest.raises(git.GitError) as e:
+        fixwork.commit_with_hooks(cfg, pr.ref.slug, clone, "m", ["app.py"])
+    msg = str(e.value)
+    assert msg.startswith("Your commit hooks passed, but git couldn't sign the commit")
+    assert "agent" in msg and "commit hooks failed" not in msg
+    assert sh(clone, "rev-parse", "HEAD") == head
+
+
+def test_apply_without_committing(setup, tmp_path):  # noqa: F811
+    from reviewr.state import WorkItem
+    from reviewr.store import Store
+
+    cfg, pr, clone = setup
+    original = (clone / "app.py").read_text()
+    (clone / "app.py").write_text(original.replace("'", '"'))
+    patch = sh(clone, "diff")
+    (clone / "app.py").write_text(original)
+    sh(clone, "status", "--porcelain")  # refresh the index after rewriting the file
+    st = Store(tmp_path / "s.sqlite3")
+    st.update_state(pr.ref, lambda s: s.plan.append(WorkItem(id=1, title="Quotes", thread_ids=[], status="ready", patch=patch)))
+    head = sh(clone, "rev-parse", "HEAD")
+
+    state = fixwork.apply_uncommitted(st, cfg, pr, 1)
+    item = state.item(1)
+    assert item.mode == "me" and item.status == "pending"
+    assert "'" not in (clone / "app.py").read_text()  # the change is in your checkout
+    assert sh(clone, "rev-parse", "HEAD") == head and "app.py" in sh(clone, "status", "--porcelain")  # uncommitted
+
+    st.update_state(pr.ref, lambda s: setattr(s.item(1), "status", "ready"))
+    with pytest.raises(ValueError, match="doesn't apply"):
+        fixwork.apply_uncommitted(st, cfg, pr, 1)  # already applied: refused, file left alone
+    assert "'" not in (clone / "app.py").read_text()
 
 
 def test_bundled_paths_are_relative():

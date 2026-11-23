@@ -16,6 +16,7 @@ worktree (drafts/...) with a copy of the changes. Nothing is pushed until Respon
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -104,6 +105,19 @@ def work_worktree(cfg: Config, pr: PullRequest) -> Path:
 HOOK_TIMEOUT_S = 900
 
 
+_SIGNING = re.compile(
+    r"^.*(?:couldn't find key in agent|couldn't get agent socket|gpg failed to sign|failed to sign the data|no private key|"
+    r"error: load key|signing failed|agent refused operation|could not open a connection to your authentication agent).*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def signing_failure(output: str) -> str | None:
+    """The line saying git couldn't sign a commit, if that's why it failed."""
+    m = _SIGNING.search(output)
+    return m.group(0).strip() if m else None
+
+
 def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, paths: list[str] | None = None) -> tuple[str, list[str]]:
     """Commit, running the repository's commit hooks the way they run when you commit by
     hand: with the branch's dependencies linked in (so hooks like ESLint find
@@ -138,9 +152,18 @@ def commit_with_hooks(cfg: Config, slug: str, worktree: Path, message: str, path
                 git._git(worktree, "add", "--", *fixed)
                 proc = attempt()
         if proc.returncode != 0:
+            output = (proc.stdout + proc.stderr).strip()
+            if signing := signing_failure(output):
+                raise git.GitError(
+                    f"Your commit hooks passed, but git couldn't sign the commit, so nothing was committed in {worktree}. "
+                    f"Your git config signs commits, and the signing key wasn't available to reviewr ({signing}). "
+                    "If you started reviewr from Finder or the Dock before this was fixed, quit and start it again so it uses "
+                    "your shell's SSH agent. Or use Apply without committing and commit the change yourself.\n\n"
+                    + output[-4000:]
+                )
             raise git.GitError(
                 f"Your repository's commit hooks failed, so nothing was committed in {worktree}. Fix what they report, then try again.\n\n"
-                + (proc.stdout + proc.stderr).strip()[-4000:]
+                + output[-4000:]
             )
         return git.head_sha(worktree), fixed
     finally:
@@ -283,6 +306,29 @@ def accept_patch(store: Store, cfg: Config, pr: PullRequest, item_id: int, messa
         it.status, it.commit_sha, it.edit_conflicts = "committed", sha, conflicts
 
     return store.update_state(pr.ref, committed)
+
+
+def apply_uncommitted(store: Store, cfg: Config, pr: PullRequest, item_id: int) -> ReviewState:
+    """Write a drafted patch into your checkout as uncommitted edits instead of committing
+    it, and make the item yours to finish: for when the commit fails (e.g. signing) or
+    you want to change the patch before committing."""
+    item = store.get_state(pr.ref).item(item_id)
+    if item.status != "ready" or not item.patch.strip():
+        raise ValueError("This work item has no drafted patch to apply.")
+    work = work_worktree(cfg, pr)
+    try:
+        git.apply_to_worktree(work, item.patch)
+    except git.GitError as e:
+        raise ValueError(
+            f"The patch doesn't apply to your checkout at {work}: the files it changes have edits there that overlap it. "
+            "Commit or stash them, then try again."
+        ) from e
+
+    def yours(s: ReviewState) -> None:
+        it = s.item(item_id)
+        it.mode, it.status, it.check_report = "me", "pending", None
+
+    return store.update_state(pr.ref, yours)
 
 
 # Checks (lint and tests for the item's files)
