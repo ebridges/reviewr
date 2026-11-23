@@ -259,3 +259,41 @@ def test_stop_all_stops_only_what_this_process_started(app):
     wait(cfg, pr, lambda s: s.status != "starting")
     run.stop_all()
     assert run.load(cfg, pr).status == "stopped"
+
+
+def _docker_image() -> str | None:
+    """A local image for the Compose test (nothing is pulled), or None to skip it."""
+    import shutil
+    import subprocess
+
+    image = os.environ.get("REVIEWR_TEST_DOCKER_IMAGE", "ubuntu:24.04")
+    if not shutil.which("docker"):
+        return None
+    try:
+        ok = subprocess.run(["docker", "image", "inspect", image], check=False, capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return image if ok else None
+
+
+@pytest.mark.skipif(_docker_image() is None, reason="needs a running Docker with the test image available locally")
+def test_compose_comes_up_and_goes_down(app):
+    import subprocess
+
+    cfg, pr, clone = app
+    (clone / "docker-compose.yml").write_text(
+        f"services:\n  sleeper:\n    image: {_docker_image()}\n    pull_policy: never\n    command: [\"sleep\", \"300\"]\n"
+    )
+    cfg.repos[pr.ref.slug].run = RunConfig(compose=ComposeConfig(file="docker-compose.yml"), services=[web(free_port())])
+    run.start(cfg, pr, "checkout")
+    s = wait(cfg, pr, lambda s: s.status != "starting", timeout=120)
+    assert s.status == "running", s.error
+    assert next(st for st in s.steps if st.id == "compose").status == "done"
+
+    def containers() -> list[str]:
+        return subprocess.run(["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={s.compose_project}"],
+                              check=False, capture_output=True, text=True, timeout=30).stdout.split()
+
+    assert len(containers()) == 1
+    run.stop(cfg, pr)
+    assert containers() == []
