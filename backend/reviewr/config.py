@@ -85,8 +85,55 @@ class EnvConfig(BaseModel):
     timeout: int = 1800
 
 
+class ServiceConfig(BaseModel):
+    """A long-running process of the app, e.g. a dev server (see run.py)."""
+
+    name: str
+    cwd: str = "."  # relative to the repo root
+    run: list[str]  # argv, never a shell string
+    env: dict[str, str] = Field(default_factory=dict)
+    # Ready when this port accepts connections; also the URL reviewr shows.
+    port: int | None = None
+    url_path: str = "/"
+    open: bool = False  # the service whose URL is the app
+
+
+class SetupCommand(BaseModel):
+    """A one-off command run before the services start (migrations, seed data)."""
+
+    name: str
+    cwd: str = "."
+    run: list[str]
+    timeout: int = 600
+
+
+class ComposeConfig(BaseModel):
+    """Containers the app needs, started with Docker Compose."""
+
+    file: str  # repo-relative, e.g. docker-compose.yml
+    services: list[str] = Field(default_factory=list)  # empty: all of them
+
+
+class RunConfig(BaseModel):
+    """How to run the app at the PR's branch (run.py). Detected from the branch's files
+    the first time (detect.detect_run), then yours to edit in Settings."""
+
+    # Files that aren't in git (e.g. .env), copied from your clone when missing.
+    env_files: list[str] = Field(default_factory=list)
+    # Set for every setup command and service, over what env files say. Use it to point
+    # the PR's app at its own database (e.g. a port of the Compose database) instead of
+    # one your .env shares with others.
+    env: dict[str, str] = Field(default_factory=dict)
+    compose: ComposeConfig | None = None
+    setup: list[SetupCommand] = Field(default_factory=list)
+    services: list[ServiceConfig] = Field(default_factory=list)
+    ready_timeout: int = 120
+
+
 class RepoConfig(BaseModel):
     path: Path
+    # How to run the app at the PR's branch; None until you save one.
+    run: RunConfig | None = None
     # Dependency environments built from the branch under review, not your clone.
     envs: list[EnvConfig] = Field(default_factory=list)
     # Put before PATH for installs and checks (e.g. the Node version the repo needs).
