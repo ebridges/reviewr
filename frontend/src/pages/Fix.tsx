@@ -142,6 +142,7 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
   });
   const accept = useMutation({ mutationFn: (allowConflicts: boolean) => api.accept(pr.ref, item.id, message, allowConflicts), onSuccess: ctx.setState });
   const acceptConflict = editsConflict(accept.error);
+  const applyOnly = useMutation({ mutationFn: () => api.applyUncommitted(pr.ref, item.id), onSuccess: ctx.setState });
   const checks = useMutation({ mutationFn: () => api.runChecks(pr.ref, item.id), onSuccess: ctx.setState });
   const files = (item.patch.match(/^diff --git/gm) ?? []).length;
   const failing = item.check_report?.runs.filter((r) => r.status === "failed" || r.status === "error").length ?? 0;
@@ -218,13 +219,26 @@ function AgentItem({ ctx, item }: { ctx: PRContext; item: WorkItem }) {
             )}
             <div className="row-wrap">
               <button className="btn primary" onClick={() => accept.mutate(false)} disabled={accept.isPending || !message.trim() || item.checks_running || !!acceptConflict}>Accept and commit</button>
+              <button className="btn" onClick={() => applyOnly.mutate()} disabled={applyOnly.isPending || accept.isPending || item.checks_running}
+                title="Write the change into your checkout as uncommitted edits, to look at, change or commit yourself">
+                Apply without committing
+              </button>
               <span className="muted small">Commits locally on reviewr's branch. Pushed together with the replies in Respond.</span>
             </div>
             <CheckoutPath prRef={pr.ref} label="Commits to your checkout" />
+            {applyOnly.error && <p className="error small pre-wrap">{(applyOnly.error as Error).message}</p>}
             {acceptConflict ? (
               <EditsConflictPrompt conflict={acceptConflict} busy={accept.isPending}
                 onProceed={() => accept.mutate(true)} onCancel={() => accept.reset()} />
-            ) : accept.error && <p className="error small">{(accept.error as Error).message}</p>}
+            ) : accept.error && (
+              <div className="stack-gap">
+                <p className="error small pre-wrap">{(accept.error as Error).message}</p>
+                <p className="small muted">
+                  Nothing was committed and your checkout is as it was. To finish this yourself, use Apply without committing: the change is
+                  written into your checkout as uncommitted edits, and this item becomes yours to commit.
+                </p>
+              </div>
+            )}
             <ReviewThreads ctx={ctx} item={item} collapsed />
             <PromptCard {...promptProps} heading="Ask the agent to change it" action="Redraft with this prompt"
               note="The prompt the last draft used. Add what you want changed (at the end is fine) and redraft; the new draft starts over from the branch." />

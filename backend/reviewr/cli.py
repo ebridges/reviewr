@@ -40,6 +40,11 @@ def main() -> None:
     if args.cmd == "serve":
         import uvicorn
 
+        from reviewr.shellenv import adopt_login_env
+
+        if changed := adopt_login_env():
+            logging.getLogger("reviewr").info("Using your login shell's environment for: %s", ", ".join(changed))
+
         uvicorn.run("reviewr.api:app", host="127.0.0.1", port=args.port, reload=args.reload)
     elif args.cmd == "fetch":
         _fetch(args.pr)

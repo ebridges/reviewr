@@ -366,6 +366,13 @@ def _edits_conflict(e: git.EditsWouldConflict) -> HTTPException:
     return HTTPException(409, {"code": "edits_conflict", "message": str(e), "worktree": str(e.worktree), "files": e.files})
 
 
+@app.post(PR + "/plan/{item_id}/apply-uncommitted")
+def post_apply_uncommitted(owner: str, repo: str, number: int, item_id: int) -> ReviewState:
+    """Put the drafted patch in your checkout without committing; the item becomes yours."""
+    ref = _ref(owner, repo, number)
+    return _plan_call(fixwork.apply_uncommitted, store(), load_config(), _load_pr(ref), item_id)
+
+
 @app.post(PR + "/plan/{item_id}/accept")
 def post_accept(owner: str, repo: str, number: int, item_id: int, req: CommitRequest) -> ReviewState:
     ref = _ref(owner, repo, number)

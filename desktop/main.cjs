@@ -51,7 +51,9 @@ function routeFrom(argv) {
 function childEnv() {
   const home = os.homedir();
   const extra = ["/opt/homebrew/bin", "/usr/local/bin", path.join(home, ".local/bin"), path.join(home, ".cargo/bin")];
-  return { ...process.env, PATH: [...extra, process.env.PATH || ""].join(path.delimiter), PYTHONUNBUFFERED: "1" };
+  // REVIEWR_GUI: the backend adopts your login shell's environment at startup (PATH,
+  // SSH_AUTH_SOCK for signed commits, ...); see backend/reviewr/shellenv.py.
+  return { ...process.env, PATH: [...extra, process.env.PATH || ""].join(path.delimiter), PYTHONUNBUFFERED: "1", REVIEWR_GUI: "1" };
 }
 
 function log(line) {

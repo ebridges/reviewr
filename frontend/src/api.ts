@@ -413,6 +413,7 @@ export const api = {
   itemAlreadyDone: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/already-done`, send("POST")),
   draftAll: (r: PRRef) => call<ReviewState>(`${base(r)}/plan/draft-all`, send("POST")),
   draft: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/draft`, send("POST")),
+  applyUncommitted: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/apply-uncommitted`, send("POST")),
   accept: (r: PRRef, id: number, message: string, allowConflicts = false) =>
     call<ReviewState>(`${base(r)}/plan/${id}/accept`, send("POST", { message, allow_conflicts: allowConflicts })),
   runChecks: (r: PRRef, id: number) => call<ReviewState>(`${base(r)}/plan/${id}/checks`, send("POST")),
